@@ -38,11 +38,13 @@ button:focus-visible, input:focus-visible, label:has(input:focus-visible) { outl
 
 .file-button { display: grid; grid-template-columns: 36px 1fr; column-gap: 10px; align-items: center; min-height: 68px; padding: 12px 13px; border: 1px dashed #4b6e9c; border-radius: 9px; background: #10223b; color: #e8f2ff; cursor: pointer; transition: .18s ease; }
 .file-button:hover { border-color: #80aef0; background: #153054; transform: translateY(-1px); }
+.file-button.disabled { opacity: .55; cursor: wait; transform: none; }
 .file-button input { display: none; }
 .file-button > span:not(.upload-icon) { align-self: end; font-size: 12px; font-weight: 700; }
 .file-button small { align-self: start; color: #839dbc; font-size: 9px; }
 .upload-icon { grid-row: 1 / 3; display: grid; place-items: center; width: 36px; height: 36px; border-radius: 9px; background: #29538a; color: #d8e9ff; font-size: 19px; }
 .sample-button { width: 100%; display: flex; justify-content: space-between; padding: 9px 3px 0; border: 0; background: none; color: #84aff1; font-size: 10px; }
+.sample-button:disabled { opacity: .5; cursor: wait; }
 
 .field { display: block; margin-bottom: 16px; }
 .field > span { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; color: #afc0d7; font-size: 10px; font-weight: 600; }
@@ -53,6 +55,7 @@ button:focus-visible, input:focus-visible, label:has(input:focus-visible) { outl
 .scale-options button, .fit-options button { min-height: 31px; padding: 0; border: 1px solid #2a3d58; border-radius: 6px; background: #101f33; color: #8095b2; font-size: 9px; transition: .15s ease; }
 .scale-options button:hover, .fit-options button:hover { border-color: #5579a9; color: #c8dbf5; }
 .scale-options button.active, .fit-options button.active { border-color: #5789d1; background: #18345a; color: #cfe3ff; box-shadow: inset 0 0 0 1px #527cb855; }
+.scale-options button:disabled, .fit-options button:disabled, .field input:disabled { opacity: .55; cursor: wait; }
 .field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .number-input { display: flex; align-items: center; height: 35px; border: 1px solid #2a3f5d; border-radius: 7px; background: #101f33; overflow: hidden; }
 .number-input:focus-within { border-color: #6499df; }
@@ -63,9 +66,16 @@ button:focus-visible, input:focus-visible, label:has(input:focus-visible) { outl
 .fit-options button { height: 47px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; color: #a4b5cb; }
 .fit-options small { color: #657d9d; font-size: 8px; }
 .fit-options button.active small { color: #85addd; }
+.fit-explanation { margin: -5px 0 10px; color: #7288a4; font-size: 8px; line-height: 1.55; }
 .connector-summary { display: flex; flex-wrap: wrap; gap: 5px; margin: -3px 0 10px; }
 .connector-summary > span { padding: 4px 6px; border: 1px solid #2b425e; border-radius: 4px; background: #102137; color: #8eacce; font-size: 8px; }
 .connector-summary small { flex-basis: 100%; color: #627994; font-size: 8px; }
+.fit-test-button { width: 100%; min-height: 34px; display: flex; align-items: center; justify-content: center; gap: 7px; margin-bottom: 6px; border: 1px solid #385b81; border-radius: 7px; background: #10243c; color: #a9c9ef; font-size: 9px; font-weight: 700; transition: .16s ease; }
+.fit-test-button:hover:not(:disabled) { border-color: #6594cb; background: #173354; color: #d3e7ff; }
+.fit-test-button.ready { border-color: #317664; background: #12352f; color: #8ee0c4; }
+.fit-test-button:disabled { opacity: .58; cursor: wait; }
+.fit-test-button .spinner { border-color: #7894b644; border-top-color: #a9c9ef; }
+.fit-test-note { display: block; margin: 0 2px 12px; color: #5f7692; font-size: 8px; line-height: 1.45; }
 .setting-error { margin: 0 0 10px; padding: 8px 9px; border: 1px solid #703c4b; border-radius: 6px; background: #2b1721; color: #ffb8c4; font-size: 9px; line-height: 1.45; }
 
 .generate { width: 100%; min-height: 43px; display: flex; align-items: center; justify-content: center; gap: 10px; border: 0; border-radius: 8px; background: linear-gradient(135deg, #78adff, #806ff0); color: #07101e; box-shadow: 0 10px 25px #406fc12e; font-size: 11px; font-weight: 800; transition: .18s ease; }

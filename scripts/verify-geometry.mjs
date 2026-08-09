@@ -2,50 +2,81 @@ import Module from 'manifold-3d'
 
 const wasm = await Module()
 wasm.setup()
-const points = [
-  [-20, -20, -20], [20, -20, -20], [20, 20, -20], [-20, 20, -20],
-  [-20, -20, 20], [20, -20, 20], [20, 20, 20], [-20, 20, 20],
-]
-const faces = [[0, 2, 1], [0, 3, 2], [4, 5, 6], [4, 6, 7], [0, 1, 5], [0, 5, 4], [1, 2, 6], [1, 6, 5], [2, 3, 7], [2, 7, 6], [3, 0, 4], [3, 4, 7]]
-const source = new wasm.Manifold(new wasm.Mesh({ numProp: 3, vertProperties: new Float32Array(points.flat()), triVerts: new Uint32Array(faces.flat()) }))
-const lower = -20 / 3
-const upper = 20 / 3
-const cutter = wasm.Manifold.cube([42, 42, upper - lower], false).translate(-21, -21, lower)
-let block = source.intersect(cutter)
 
-const pinDiameter = 6
-const pinHeight = 4.8
-const radius = pinDiameter / 2
-const leadHeight = 1
-const body = wasm.Manifold.cylinder(pinHeight - leadHeight + 0.65, radius, radius, 28).translate(0, 0, upper - 0.65)
-const lead = wasm.Manifold.cylinder(leadHeight, radius, radius * 0.74, 28).translate(0, 0, upper + pinHeight - leadHeight)
-const pin = body.add(lead)
-let next = block.add(pin)
-block.delete(); block = next
+const profile = {
+  pinHeight: 5,
+  leadIn: 0.9,
+  embed: 0.65,
+  rootRelief: 0.25,
+  rootCollarHeight: 0.45,
+  springGap: 5.65,
+  springThickness: 0.85,
+  deflectionRoom: 0.6,
+  beamWidth: 3.35,
+  clearance: 0.35,
+  extraDepth: 0.35,
+  socketLeadIn: 0.8,
+  roof: 1.4,
+}
 
-const preload = 0.15
-const springThickness = 0.84
-const springGap = pinDiameter - preload
-const cellWidth = springGap + springThickness * 2 + 1.2
-const cellDepth = pinDiameter + 0.7
-const socketDepth = pinHeight + 0.35
-const cavity = wasm.Manifold.cube([cellWidth, cellDepth, socketDepth + 0.08], false).translate(-cellWidth / 2, -cellDepth / 2, lower - 0.04)
-const entrance = wasm.Manifold.cube([cellWidth + 0.5, cellDepth + 0.5, 0.84], false).translate(-(cellWidth + 0.5) / 2, -(cellDepth + 0.5) / 2, lower - 0.04)
-const socketVoid = cavity.add(entrance)
-next = block.subtract(socketVoid)
-block.delete(); block = next
+function addPin(block, diameter, z) {
+  const radius = diameter / 2
+  const root = wasm.Manifold.cylinder(profile.embed, radius + profile.rootRelief, radius + profile.rootRelief, 32).translate(0, 0, z - profile.embed)
+  const collar = wasm.Manifold.cylinder(profile.rootCollarHeight, radius + profile.rootRelief, radius, 32).translate(0, 0, z)
+  const shaft = wasm.Manifold.cylinder(profile.pinHeight - profile.leadIn - profile.rootCollarHeight, radius, radius, 32).translate(0, 0, z + profile.rootCollarHeight)
+  const lead = wasm.Manifold.cylinder(profile.leadIn, radius, radius * 0.74, 32).translate(0, 0, z + profile.pinHeight - profile.leadIn)
+  const rooted = root.add(collar)
+  const body = rooted.add(shaft)
+  const pin = body.add(lead)
+  const result = block.add(pin)
+  for (const item of [pin, lead, body, rooted, shaft, collar, root, block]) item.delete()
+  return result
+}
 
-const beamWidth = pinDiameter * 0.56
-const beamLength = socketDepth - 0.36 + 0.25
-const beamZ = lower + 0.36
-const leftBeam = wasm.Manifold.cube([springThickness, beamWidth, beamLength], false).translate(-springGap / 2 - springThickness, -beamWidth / 2, beamZ)
-const rightBeam = wasm.Manifold.cube([springThickness, beamWidth, beamLength], false).translate(springGap / 2, -beamWidth / 2, beamZ)
-const springs = leftBeam.add(rightBeam)
-next = block.add(springs)
-block.delete(); block = next
+function addSocket(block, z) {
+  const width = profile.springGap + profile.springThickness * 2 + profile.deflectionRoom * 2
+  const depth = 5.8 + profile.clearance * 2
+  const socketDepth = profile.pinHeight + profile.extraDepth
+  const cavity = wasm.Manifold.cube([width, depth, socketDepth + 0.08], false).translate(-width / 2, -depth / 2, z - 0.04)
+  const entrance = wasm.Manifold.cube([width + 0.5, depth + 0.5, profile.socketLeadIn + 0.04], false).translate(-(width + 0.5) / 2, -(depth + 0.5) / 2, z - 0.04)
+  const socketVoid = cavity.add(entrance)
+  let result = block.subtract(socketVoid)
+  for (const item of [socketVoid, entrance, cavity, block]) item.delete()
 
-const mesh = block.getMesh()
-if (block.status() !== 'NoError' || mesh.triVerts.length === 0) throw new Error('Compliant connector result is invalid')
-console.log(JSON.stringify({ status: block.status(), triangles: mesh.triVerts.length / 3, volume: block.volume().toFixed(2), springGap }))
+  const beamStart = z + profile.socketLeadIn * 0.45
+  const beamLength = socketDepth - profile.socketLeadIn * 0.45 + 0.25
+  const left = wasm.Manifold.cube([profile.springThickness, profile.beamWidth, beamLength], false).translate(-profile.springGap / 2 - profile.springThickness, -profile.beamWidth / 2, beamStart)
+  const right = wasm.Manifold.cube([profile.springThickness, profile.beamWidth, beamLength], false).translate(profile.springGap / 2, -profile.beamWidth / 2, beamStart)
+  const springs = left.add(right)
+  const combined = result.add(springs)
+  for (const item of [springs, right, left, result]) item.delete()
+  return combined
+}
 
-for (const item of [springs, rightBeam, leftBeam, socketVoid, entrance, cavity, pin, lead, body, block, cutter, source]) item.delete()
+const results = []
+for (const [level, diameter] of [[19, 5.8], [20, 5.9], [21, 6.0]]) {
+  let male = wasm.Manifold.cube([14, 14, 3], true).translate(0, 0, 1.5)
+  male = addPin(male, diameter, 3)
+  let female = wasm.Manifold.cube([14, 14, profile.pinHeight + profile.extraDepth + profile.roof], true)
+    .translate(0, 0, (profile.pinHeight + profile.extraDepth + profile.roof) / 2)
+  female = addSocket(female, 0)
+  const printableFemale = female.rotate(180, 0, 0).translate(0, 0, profile.pinHeight + profile.extraDepth + profile.roof)
+  female.delete()
+  female = printableFemale
+  if (male.status() !== 'NoError' || female.status() !== 'NoError') throw new Error(`Fit ${level} produced an invalid manifold`)
+  if (!male.getMesh().triVerts.length || !female.getMesh().triVerts.length) throw new Error(`Fit ${level} produced an empty mesh`)
+  results.push({
+    level,
+    diameter,
+    totalInterference: +(diameter - profile.springGap).toFixed(2),
+    perBeamDeflection: +((diameter - profile.springGap) / 2).toFixed(3),
+    maleTriangles: male.getMesh().triVerts.length / 3,
+    femaleTriangles: female.getMesh().triVerts.length / 3,
+    maleVolume: +male.volume().toFixed(2),
+    femaleVolume: +female.volume().toFixed(2),
+  })
+  male.delete()
+  female.delete()
+}
+
+console.log(JSON.stringify({ status: 'NoError', springGap: profile.springGap, results }))

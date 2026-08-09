@@ -1,25 +1,30 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { zipSync } from 'fflate'
+import { CONNECTOR_PROFILE, pinDiameterFor, springCellSize } from './connectorProfile'
 import Viewer from './Viewer'
-import type { ConnectorPosition, GeneratedFile, MeshSummary, WorkerRequest, WorkerResponse } from './types'
+import type { ConnectorPosition, FitLevel, GeneratedFile, MeshSummary, WorkerRequest, WorkerResponse } from './types'
 
 const formatter = new Intl.NumberFormat('ko-KR', { maximumFractionDigits: 2 })
 const blockColors = ['#4f8cff', '#9a78ff', '#ef6f9d', '#f1a54b', '#42c5a6', '#58b7ed', '#e079c1', '#b8d75d']
+const fitOptions: { level: FitLevel; label: string; note: string }[] = [
+  { level: 19, label: '기본', note: '먼저 권장' },
+  { level: 20, label: '타이트', note: '+0.1 mm' },
+  { level: 21, label: '매우 타이트', note: '+0.2 mm' },
+]
 
 export default function App() {
   const worker = useRef<Worker | null>(null)
   const fileInput = useRef<HTMLInputElement | null>(null)
   const [mesh, setMesh] = useState<MeshSummary | null>(null)
-  const [blockCount, setBlockCount] = useState(3)
+  const [blockCount, setBlockCount] = useState(4)
   const [objectScale, setObjectScale] = useState(1)
-  const [pinDiameter, setPinDiameter] = useState(6)
-  const [pinPitch, setPinPitch] = useState(16)
-  const [springPreload, setSpringPreload] = useState(0.15)
+  const [fitLevel, setFitLevel] = useState<FitLevel>(19)
   const [status, setStatus] = useState('STL 파일을 선택해 시작하세요.')
   const [error, setError] = useState('')
   const [files, setFiles] = useState<GeneratedFile[]>([])
+  const [couponFiles, setCouponFiles] = useState<GeneratedFile[]>([])
   const [connectors, setConnectors] = useState<ConnectorPosition[][]>([])
-  const [busy, setBusy] = useState(false)
+  const [operation, setOperation] = useState<'blocks' | 'fit-test' | null>(null)
   const [dropActive, setDropActive] = useState(false)
   const [viewerVersion, setViewerVersion] = useState(0)
 
@@ -29,23 +34,28 @@ export default function App() {
       if (event.data.type === 'PROGRESS') setStatus(event.data.message)
       if (event.data.type === 'ERROR') {
         setError(friendlyError(event.data.message))
-        setBusy(false)
-        setStatus('설정을 확인한 뒤 다시 시도해 주세요.')
+        setOperation(null)
+        setStatus('설정을 확인하고 다시 시도해 주세요.')
       }
       if (event.data.type === 'STL_LOADED') {
         setMesh(event.data.mesh)
         setError('')
         setFiles([])
         setConnectors([])
-        setBusy(false)
+        setOperation(null)
         setViewerVersion((value) => value + 1)
         setStatus(`모델을 불러왔습니다 · 삼각형 ${event.data.mesh.triangles.toLocaleString()}개`)
       }
       if (event.data.type === 'GENERATION_COMPLETE') {
         setFiles(event.data.files)
         setConnectors(event.data.connectors)
-        setBusy(false)
-        setStatus(`블록 ${event.data.files.length}개가 준비됐습니다.`)
+        setOperation(null)
+        setStatus(`출력 가능한 블록 ${event.data.files.length}개가 준비되었습니다.`)
+      }
+      if (event.data.type === 'FIT_TEST_COMPLETE') {
+        setCouponFiles(event.data.files)
+        setOperation(null)
+        setStatus('19·20·21 맞춤 테스트 STL 6개가 준비되었습니다.')
       }
     }
     worker.current = instance
@@ -56,18 +66,18 @@ export default function App() {
     const saved = window.localStorage.getItem('blockstl-settings')
     if (!saved) return
     try {
-      const settings = JSON.parse(saved) as Record<string, number>
-      if (settings.blockCount) setBlockCount(settings.blockCount)
-      if (settings.objectScale) setObjectScale(settings.objectScale)
-      if (settings.pinDiameter) setPinDiameter(settings.pinDiameter)
-      if (settings.pinPitch) setPinPitch(settings.pinPitch)
-      if (settings.springPreload !== undefined) setSpringPreload(settings.springPreload)
-    } catch { window.localStorage.removeItem('blockstl-settings') }
+      const settings = JSON.parse(saved) as { blockCount?: number; objectScale?: number; fitLevel?: number }
+      if (settings.blockCount && settings.blockCount >= 2 && settings.blockCount <= 8) setBlockCount(settings.blockCount)
+      if (settings.objectScale && settings.objectScale >= 0.5 && settings.objectScale <= 2) setObjectScale(settings.objectScale)
+      if (settings.fitLevel === 19 || settings.fitLevel === 20 || settings.fitLevel === 21) setFitLevel(settings.fitLevel)
+    } catch {
+      window.localStorage.removeItem('blockstl-settings')
+    }
   }, [])
 
   useEffect(() => {
-    window.localStorage.setItem('blockstl-settings', JSON.stringify({ blockCount, objectScale, pinDiameter, pinPitch, springPreload }))
-  }, [blockCount, objectScale, pinDiameter, pinPitch, springPreload])
+    window.localStorage.setItem('blockstl-settings', JSON.stringify({ blockCount, objectScale, fitLevel }))
+  }, [blockCount, objectScale, fitLevel])
 
   const cuts = useMemo(() => {
     if (!mesh) return []
@@ -80,19 +90,21 @@ export default function App() {
     (mesh.bounds.max[1] - mesh.bounds.min[1]) * objectScale,
     (mesh.bounds.max[2] - mesh.bounds.min[2]) * objectScale,
   ] : null, [mesh, objectScale])
-  const pinHeight = Math.max(3, pinDiameter * 0.8)
-  const springThickness = Math.max(0.75, Math.min(1.2, pinDiameter * 0.14))
-  const springCellWidth = pinDiameter - springPreload + springThickness * 2 + 1.2
+
+  const pinDiameter = pinDiameterFor(fitLevel)
+  const springCell = springCellSize()
+  const interference = pinDiameter - CONNECTOR_PROFILE.springGapMm
   const blockLayerHeight = scaledBounds ? scaledBounds[2] / blockCount : Infinity
-  const spacingError = pinPitch < springCellWidth + 0.8 ? `현재 결합부에는 핀 간격 ${Math.ceil((springCellWidth + 0.8) * 10) / 10} mm 이상이 필요합니다.` : ''
-  const thicknessError = blockLayerHeight < pinHeight + Math.max(1.2, pinDiameter * 0.22) ? '블록 한 층이 결합부보다 얇습니다. 블록 개수나 핀 지름을 줄여 주세요.' : ''
-  const connectorError = spacingError || thicknessError
+  const connectorError = blockLayerHeight < CONNECTOR_PROFILE.pinHeightMm + CONNECTOR_PROFILE.roofThicknessMm
+    ? '블록 한 층이 결합부보다 얇습니다. 블록 수를 줄이거나 출력 크기를 키워 주세요.'
+    : ''
   const connectorTotal = connectors.reduce((total, plan) => total + plan.length, 0)
+  const busy = operation !== null
 
   async function openFile(file: File | undefined) {
-    if (!file) return
+    if (!file || busy) return
     if (!file.name.toLowerCase().endsWith('.stl')) {
-      setError('STL 형식의 파일만 열 수 있습니다.')
+      setError('STL 형식의 파일만 사용할 수 있습니다.')
       return
     }
     setError('')
@@ -104,6 +116,7 @@ export default function App() {
   }
 
   function loadDemo() {
+    if (busy) return
     const buffer = new TextEncoder().encode(cubeStl()).buffer
     setError('')
     setFiles([])
@@ -113,16 +126,46 @@ export default function App() {
   }
 
   function generate() {
-    if (!mesh || connectorError) return
+    if (!mesh || connectorError || busy) return
     setFiles([])
     setConnectors([])
     setError('')
-    setBusy(true)
+    setOperation('blocks')
     setStatus('블록 생성을 시작합니다…')
-    worker.current?.postMessage({ type: 'GENERATE_BLOCKS', settings: {
-      blockCount, objectScale, pinDiameter, pinPitch,
-      pinHeight, socketClearance: 0.35, springPreload,
-    } } satisfies WorkerRequest)
+    worker.current?.postMessage({ type: 'GENERATE_BLOCKS', settings: { blockCount, objectScale, fitLevel } } satisfies WorkerRequest)
+  }
+
+  function changeBlockCount(value: number) {
+    setBlockCount(value)
+    clearGeneratedResult()
+  }
+
+  function changeObjectScale(value: number) {
+    setObjectScale(value)
+    clearGeneratedResult()
+  }
+
+  function changeFitLevel(value: FitLevel) {
+    setFitLevel(value)
+    clearGeneratedResult()
+  }
+
+  function clearGeneratedResult() {
+    setFiles([])
+    setConnectors([])
+    if (mesh) setStatus('설정이 변경되었습니다. 블록을 다시 생성해 주세요.')
+  }
+
+  function prepareFitTest() {
+    if (busy) return
+    if (couponFiles.length) {
+      downloadArchive(couponFiles, 'BlocksTL_fit_test_19-20-21.zip', calibrationGuide())
+      return
+    }
+    setError('')
+    setOperation('fit-test')
+    setStatus('맞춤 테스트 STL을 만들고 있습니다…')
+    worker.current?.postMessage({ type: 'GENERATE_FIT_TEST' } satisfies WorkerRequest)
   }
 
   function download(file: GeneratedFile) {
@@ -131,9 +174,8 @@ export default function App() {
 
   function downloadAll() {
     if (!files.length) return
-    const archive = zipSync(Object.fromEntries(files.map((file) => [file.name, new Uint8Array(file.buffer)])))
     const baseName = mesh?.name.replace(/\.stl$/i, '') || 'blockstl'
-    saveBlob(new Blob([archive as BlobPart], { type: 'application/zip' }), `${baseName}_blocks.zip`)
+    downloadArchive(files, `${baseName}_blocks.zip`)
   }
 
   return (
@@ -143,60 +185,58 @@ export default function App() {
           <span className="brand-mark" aria-hidden="true">B</span>
           <span>BlocksTL</span>
         </a>
-        <p>STL을 조립 가능한 블록으로 나눠보세요</p>
+        <p>STL을 조립 가능한 블록으로 나눠보세요.</p>
         <span className="privacy-badge"><span aria-hidden="true">●</span> 내 기기에서만 처리</span>
       </header>
 
       <section className="workspace">
         <aside className="sidebar" aria-label="블록 생성 설정">
           <StepTitle number="1" title="STL 파일" />
-          <label className="file-button">
-            <input ref={fileInput} type="file" accept=".stl,model/stl" onChange={(event) => void openFile(event.target.files?.[0])} />
+          <label className={`file-button ${busy ? 'disabled' : ''}`}>
+            <input ref={fileInput} type="file" accept=".stl,model/stl" disabled={busy} onChange={(event) => void openFile(event.target.files?.[0])} />
             <span className="upload-icon" aria-hidden="true">↑</span>
             <span>STL 파일 선택</span>
             <small>Binary · ASCII, 기기에서 바로 처리</small>
           </label>
-          <button className="sample-button" onClick={loadDemo}>샘플 모델로 체험하기 <span>→</span></button>
+          <button className="sample-button" disabled={busy} onClick={loadDemo}>샘플 모델로 체험하기 <span>→</span></button>
 
           <StepTitle number="2" title="분할 설정" />
           <label className="field">
             <span>블록 개수 <output>{blockCount}개</output></span>
-            <input aria-label="블록 개수" type="range" min="2" max="8" value={blockCount} onChange={(event) => setBlockCount(Number(event.target.value))} />
+            <input aria-label="블록 개수" type="range" min="2" max="8" value={blockCount} disabled={busy} onChange={(event) => changeBlockCount(Number(event.target.value))} />
             <span className="range-scale"><small>2</small><small>8</small></span>
           </label>
-          <label className="field">
+          <div className="field">
             <span>출력 크기 <output>{Math.round(objectScale * 100)}%</output></span>
             <div className="scale-options">
-              {[0.5, 1, 1.5, 2].map((scale) => <button key={scale} type="button" className={objectScale === scale ? 'active' : ''} onClick={() => setObjectScale(scale)}>{scale * 100}%</button>)}
+              {[0.5, 1, 1.5, 2].map((scale) => <button key={scale} type="button" disabled={busy} className={objectScale === scale ? 'active' : ''} onClick={() => changeObjectScale(scale)}>{scale * 100}%</button>)}
             </div>
-          </label>
-
-          <StepTitle number="3" title="결합부 설정" />
-          <div className="field-row">
-            <label className="field compact">
-              <span>핀 지름</span>
-              <div className="number-input"><input aria-label="핀 지름" type="number" min="1" max="20" step="0.5" value={pinDiameter} onChange={(event) => setPinDiameter(Number(event.target.value) || 1)} /><span>mm</span></div>
-            </label>
-            <label className="field compact">
-              <span>핀 간격</span>
-              <div className="number-input"><input aria-label="핀 간격" type="number" min="2" max="50" step="1" value={pinPitch} onChange={(event) => setPinPitch(Number(event.target.value) || 2)} /><span>mm</span></div>
-            </label>
           </div>
-          <label className="field fit-field">
-            <span>결합 강도 <output>{springPreload <= 0.06 ? '부드럽게' : springPreload >= 0.24 ? '단단하게' : '균형'}</output></span>
+
+          <StepTitle number="3" title="핀 맞춤" />
+          <div className="field fit-field">
+            <span>수핀 크기 <output>{fitLevel} · Ø {pinDiameter.toFixed(1)} mm</output></span>
             <div className="fit-options">
-              <button type="button" className={springPreload === 0.05 ? 'active' : ''} onClick={() => setSpringPreload(0.05)}>부드럽게<small>자주 분리</small></button>
-              <button type="button" className={springPreload === 0.15 ? 'active' : ''} onClick={() => setSpringPreload(0.15)}>균형<small>PLA 권장</small></button>
-              <button type="button" className={springPreload === 0.25 ? 'active' : ''} onClick={() => setSpringPreload(0.25)}>단단하게<small>강한 고정</small></button>
+              {fitOptions.map((option) => <button key={option.level} type="button" disabled={busy} className={fitLevel === option.level ? 'active' : ''} onClick={() => changeFitLevel(option.level)}>
+                {option.level} · {option.label}<small>{option.note}</small>
+              </button>)}
             </div>
-          </label>
-          <div className="connector-summary"><span>원형 테이퍼 핀</span><span>탄성 스프링 소켓</span><small>핀 높이 {formatter.format(pinHeight)} mm · 셀 폭 {formatter.format(springCellWidth)} mm</small></div>
+          </div>
+          <p className="fit-explanation">숫자가 커질수록 수핀만 0.1 mm씩 굵어집니다. 스프링 소켓은 동일해서 결과를 직접 비교할 수 있습니다.</p>
+          <div className="connector-summary">
+            <span>테이퍼 원형 핀</span><span>양쪽 탄성 스프링</span>
+            <small>핀 높이 {CONNECTOR_PROFILE.pinHeightMm} mm · 스프링 목 {CONNECTOR_PROFILE.springGapMm} mm · 간섭 {interference.toFixed(2)} mm · 셀 {springCell.width.toFixed(2)} × {springCell.depth.toFixed(2)} mm</small>
+          </div>
+          <button className={`fit-test-button ${couponFiles.length ? 'ready' : ''}`} type="button" disabled={busy} onClick={prepareFitTest}>
+            {operation === 'fit-test' ? <><span className="spinner" /> 테스트 조각 생성 중…</> : couponFiles.length ? '맞춤 테스트 ZIP 받기' : '19·20·21 맞춤 테스트 STL 만들기'}
+          </button>
+          <small className="fit-test-note">본 출력 전에 6개의 작은 암·수 조각으로 프린터 공차를 확인하세요.</small>
           {connectorError && <p className="setting-error">{connectorError}</p>}
 
           <button className="generate" disabled={!mesh || busy || Boolean(connectorError)} onClick={generate}>
-            {busy ? <><span className="spinner" /> 블록 생성 중…</> : <>블록 생성하기 <span>→</span></>}
+            {operation === 'blocks' ? <><span className="spinner" /> 블록 생성 중…</> : <>블록 생성하기 <span>→</span></>}
           </button>
-          <p className="privacy-note"><span aria-hidden="true">◇</span> 선택한 파일은 서버로 전송되지 않습니다.</p>
+          <p className="privacy-note"><span aria-hidden="true">●</span> 선택한 파일은 서버로 전송되지 않습니다.</p>
         </aside>
 
         <section className={`canvas-area ${dropActive ? 'drop-active' : ''}`}
@@ -208,9 +248,9 @@ export default function App() {
             <div className="model-name"><span className={mesh ? 'ready' : ''} />{mesh ? mesh.name : '모델을 불러오지 않았습니다'}</div>
             {mesh && <button onClick={() => setViewerVersion((value) => value + 1)}>보기 초기화</button>}
           </div>
-          {dropActive && <div className="drop-overlay"><strong>여기에 놓아주세요</strong><span>STL 파일을 바로 열 수 있습니다</span></div>}
+          {dropActive && <div className="drop-overlay"><strong>여기에 놓으세요</strong><span>STL 파일을 바로 열 수 있습니다.</span></div>}
           {mesh
-            ? <Viewer key={viewerVersion} mesh={mesh} blockCount={blockCount} objectScale={objectScale} connectors={connectors} />
+            ? <Viewer key={viewerVersion} mesh={mesh} blockCount={blockCount} objectScale={objectScale} connectors={connectors} connectorDiameter={pinDiameter} />
             : <EmptyState onOpen={() => fileInput.current?.click()} onDemo={loadDemo} />}
           {mesh && <div className="viewer-hint">마우스로 회전 · 휠로 확대/축소</div>}
           {mesh && <div className="legend">{Array.from({ length: blockCount }, (_, index) => <span key={index}><b style={{ background: blockColors[index] }} />블록 {index + 1}</span>)}</div>}
@@ -228,10 +268,10 @@ export default function App() {
             </dl>
             <div className="inspector-title secondary"><span>분할 위치</span><small>{cuts.length}곳</small></div>
             <ol className="cuts">{cuts.map((cut, index) => <li key={cut}><span>분할면 {index + 1}</span><strong>Z {formatter.format(cut * objectScale)} mm</strong></li>)}</ol>
-          </> : <div className="inspector-empty"><span aria-hidden="true">▱</span><p>STL 파일을 열면 모델의 크기와 분할 위치를 확인할 수 있습니다.</p></div>}
+          </> : <div className="inspector-empty"><span aria-hidden="true">◇</span><p>STL 파일을 열면 모델 크기와 분할 위치를 확인할 수 있습니다.</p></div>}
           <div className={`status-card ${error ? 'error' : ''} ${busy ? 'working' : ''}`}>
             <span className="status-dot" />
-            <div><strong>{error ? '확인이 필요합니다' : busy ? '처리 중입니다' : files.length ? '생성이 완료됐습니다' : '준비 상태'}</strong><p>{error || status}</p></div>
+            <div><strong>{error ? '확인이 필요합니다' : busy ? '처리 중입니다' : files.length ? '생성이 완료되었습니다' : '준비 상태'}</strong><p>{error || status}</p></div>
           </div>
         </aside>
       </section>
@@ -247,9 +287,9 @@ function EmptyState({ onOpen, onDemo }: { onOpen: () => void; onDemo: () => void
   return <div className="empty">
     <div className="empty-visual" aria-hidden="true"><span /><span /><span /><i /></div>
     <h1>STL 파일을 열어 시작하세요</h1>
-    <p>모델을 원하는 높이로 나누고, 서로 맞물리는 핀과 소켓을 자동으로 만들 수 있습니다.</p>
+    <p>모델을 원하는 높이로 나누고, 서로 맞물리는 테이퍼 핀과 탄성 스프링 소켓을 자동으로 만듭니다.</p>
     <div><button className="empty-primary" onClick={onOpen}>STL 파일 열기</button><button className="empty-secondary" onClick={onDemo}>샘플 보기</button></div>
-    <small>업로드 없이 브라우저에서 바로 처리됩니다</small>
+    <small>업로드 없이 브라우저에서 바로 처리합니다.</small>
   </div>
 }
 
@@ -258,6 +298,17 @@ function ResultPanel({ files, connectorTotal, onDownload, onDownloadAll }: { fil
     <div className="results-head"><div><span className="success-check">✓</span><span><strong>블록 생성 완료</strong><small>{files.length}개 블록 · 결합부 {connectorTotal}개</small></span></div><button onClick={onDownloadAll}>ZIP으로 모두 받기</button></div>
     <div className="result-files">{files.map((file, index) => <button key={file.name} onClick={() => onDownload(file)}><span><b style={{ background: blockColors[index] }} />블록 {index + 1}<small>{file.triangles.toLocaleString()} tris</small></span><em>STL ↓</em></button>)}</div>
   </div>
+}
+
+function downloadArchive(files: GeneratedFile[], name: string, guide?: string) {
+  const entries: Record<string, Uint8Array> = Object.fromEntries(files.map((file) => [file.name, new Uint8Array(file.buffer)]))
+  if (guide) entries['먼저_읽어주세요.txt'] = new TextEncoder().encode(guide)
+  const archive = zipSync(entries)
+  saveBlob(new Blob([archive as BlobPart], { type: 'application/zip' }), name)
+}
+
+function calibrationGuide() {
+  return `BlocksTL 핀 맞춤 테스트\n\n1. 실제 블록과 같은 프린터·필라멘트·레이어 높이로 출력하세요.\n2. 파일 이름의 같은 번호끼리 암·수 조각을 결합하세요.\n3. 19부터 시험하고, 너무 느슨할 때만 20 또는 21로 올리세요.\n4. 무리하게 밀어 넣어 스프링이 하얗게 변하거나 깨지면 더 낮은 번호를 사용하세요.\n\n19: 수핀 5.8 mm / 총 간섭 0.15 mm\n20: 수핀 5.9 mm / 총 간섭 0.25 mm\n21: 수핀 6.0 mm / 총 간섭 0.35 mm\n\n암 스프링 소켓은 세 번호 모두 동일합니다. 번호는 수핀 지름만 바꿉니다.\n`
 }
 
 function saveBlob(blob: Blob, name: string) {
@@ -270,7 +321,7 @@ function saveBlob(blob: Blob, name: string) {
 }
 
 function friendlyError(message: string) {
-  if (/not manifold/i.test(message)) return '빈틈이 있거나 뒤집힌 면이 있는 모델입니다. 3D 편집 도구에서 메시를 복구한 뒤 다시 시도해 주세요.'
+  if (/not manifold/i.test(message)) return '비어 있거나 뒤집힌 면이 있는 모델입니다. 3D 편집 도구에서 메시를 복구한 뒤 다시 시도해 주세요.'
   if (/too large|exceeds/i.test(message)) return '모델이 너무 크거나 복잡합니다. 출력 크기 또는 블록 개수를 줄여 주세요.'
   return message
 }

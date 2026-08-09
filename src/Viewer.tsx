@@ -1,13 +1,20 @@
 import { useEffect, useRef } from 'react'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
+import { CONNECTOR_PROFILE } from './connectorProfile'
 import type { ConnectorPosition, MeshSummary } from './types'
 
-type Props = { mesh: MeshSummary | null; blockCount: number; objectScale: number; connectors: ConnectorPosition[][] }
+type Props = {
+  mesh: MeshSummary | null
+  blockCount: number
+  objectScale: number
+  connectors: ConnectorPosition[][]
+  connectorDiameter: number
+}
 
 const palette = ['#3d7eff', '#9c75ff', '#f46f9d', '#f6a443', '#3bc3a1', '#5db5f2', '#e87bc1', '#bfd35d']
 
-export default function Viewer({ mesh, blockCount, objectScale, connectors }: Props) {
+export default function Viewer({ mesh, blockCount, objectScale, connectors, connectorDiameter }: Props) {
   const mount = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -68,9 +75,17 @@ export default function Viewer({ mesh, blockCount, objectScale, connectors }: Pr
         stage.add(line)
       }
       connectors.flat().forEach((pin) => {
-        const marker = new THREE.Mesh(new THREE.CylinderGeometry(1.3 * objectScale, 1.3 * objectScale, 6 * objectScale, 16), new THREE.MeshBasicMaterial({ color: '#d9f0ff', transparent: true, opacity: 0.8 }))
+        const markerHeight = CONNECTOR_PROFILE.pinHeightMm
+        const marker = new THREE.Mesh(
+          new THREE.CylinderGeometry(connectorDiameter / 2, connectorDiameter / 2, markerHeight, 20),
+          new THREE.MeshBasicMaterial({ color: '#d9f0ff', transparent: true, opacity: 0.8 }),
+        )
         marker.rotation.x = Math.PI / 2
-        marker.position.set((pin.x - center.x) * objectScale, (pin.y - center.y) * objectScale, (pin.z - center.z) * objectScale)
+        marker.position.set(
+          pin.x - center.x * objectScale,
+          pin.y - center.y * objectScale,
+          pin.z - center.z * objectScale + markerHeight / 2,
+        )
         stage.add(marker)
       })
       grid.scale.setScalar(Math.max(1, size / 5))
@@ -96,7 +111,7 @@ export default function Viewer({ mesh, blockCount, objectScale, connectors }: Pr
     return () => {
       cancelAnimationFrame(frame); observer.disconnect(); controls.dispose(); renderer.dispose(); geometryDispose(stage); host.removeChild(renderer.domElement)
     }
-  }, [mesh, blockCount, objectScale, connectors])
+  }, [mesh, blockCount, objectScale, connectors, connectorDiameter])
 
   return <div ref={mount} className="viewer" aria-label="STL 3D preview" />
 }
