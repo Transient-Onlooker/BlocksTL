@@ -31,3 +31,11 @@ button { cursor: pointer; }
 dl { margin: 0; }dl div { display: flex; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid #203149; font-size: 11px; }dt { color: #8298b8; }dd { margin: 0; color: #e0ecff; font-family: 'DM Mono', monospace; font-size: 10px; }.cut-heading { margin-top: 26px; }.cuts { padding: 0; margin: 0; list-style: none; }.cuts li { display: flex; justify-content: space-between; align-items: center; padding: 10px 0; border-bottom: 1px solid #203149; font-size: 10px; color: #95aac8; }.cuts strong { color: #c0d8ff; font-family: 'DM Mono', monospace; font-size: 10px; font-weight: 400; }.muted { color: #788eab; line-height: 1.7; font-size: 11px; }.status { position: absolute; bottom: 24px; width: 218px; border: 1px solid #234468; background: #0e2138; border-radius: 4px; padding: 10px; color: #a9c6ed; font-size: 10px; line-height: 1.5; }.status.error { color: #ffc1c7; border-color: #743c4d; background: #2b1721; }.status-dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: #57d5a9; margin: 0 7px 1px 0; }.error .status-dot { background: #ff7785; }
 @media (max-width: 900px) { .workspace { grid-template-columns: 240px minmax(360px, 1fr); }.inspector { display: none; } }
 @media (max-width: 660px) { .topbar { padding: 0 15px; }.topbar p, .badge { display: none; }.workspace { display: block; }.sidebar { border-bottom: 1px solid #203047; }.canvas-area { height: 520px; }.sidebar { padding: 18px; }.field.compact { display: inline-block; width: 48%; margin-right: 3%; }.legend { flex-wrap: wrap; max-width: 220px; } }
+
+.drop-help { color: #7189aa; font-size: 10px; margin: 7px 0 0; }
+.setting-error { color: #ffadba; border-left: 2px solid #f06b7b; font-size: 10px; line-height: 1.5; margin: 3px 0 10px; padding-left: 8px; }
+.canvas-area.drop-active { outline: 2px dashed #82baff; outline-offset: -12px; background: #132a49; }
+.view-reset { position: absolute; z-index: 3; top: 40px; right: 20px; border: 1px solid #3a5d83; color: #b8d8ff; background: #0d2039d9; border-radius: 4px; padding: 6px 9px; font-size: 10px; }
+.view-reset:hover { background: #17375f; }
+.working .status-dot { background: #8ebcff; animation: pulse 1s infinite alternate; }
+@keyframes pulse { to { box-shadow: 0 0 0 5px #8ebcff22; } }

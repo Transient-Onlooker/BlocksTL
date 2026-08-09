@@ -12,6 +12,7 @@ export type MeshSummary = {
 
 export type GeneratorSettings = {
   blockCount: number
+  objectScale: number
   pinDiameter: number
   pinPitch: number
   pinHeight: number

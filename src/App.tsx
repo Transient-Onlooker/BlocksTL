@@ -15,20 +15,26 @@ export default function App() {
   const [error, setError] = useState('')
   const [files, setFiles] = useState<GeneratedFile[]>([])
   const [connectors, setConnectors] = useState<ConnectorPosition[][]>([])
+  const [busy, setBusy] = useState(false)
+  const [dropActive, setDropActive] = useState(false)
+  const [viewerVersion, setViewerVersion] = useState(0)
 
   useEffect(() => {
     const instance = new Worker(new URL('./geometry.worker.ts', import.meta.url), { type: 'module' })
     instance.onmessage = (event: MessageEvent<WorkerResponse>) => {
       if (event.data.type === 'PROGRESS') setStatus(event.data.message)
+      if (event.data.type === 'ERROR') setBusy(false)
       if (event.data.type === 'ERROR') { setError(event.data.message); setStatus('파일을 다시 선택해 주세요.') }
       if (event.data.type === 'STL_LOADED') {
         setMesh(event.data.mesh)
         setError('')
+        setBusy(false)
         setStatus(`${event.data.mesh.triangles.toLocaleString()} triangles ready — preview updates instantly.`)
       }
       if (event.data.type === 'GENERATION_COMPLETE') {
         setFiles(event.data.files)
         setConnectors(event.data.connectors)
+        setBusy(false)
         setStatus(`${event.data.files.length} watertight STL blocks are ready to download.`)
       }
     }
@@ -36,11 +42,34 @@ export default function App() {
     return () => instance.terminate()
   }, [])
 
+  useEffect(() => {
+    const saved = window.localStorage.getItem('blockstl-settings')
+    if (!saved) return
+    try {
+      const settings = JSON.parse(saved) as Record<string, number>
+      if (settings.blockCount) setBlockCount(settings.blockCount)
+      if (settings.objectScale) setObjectScale(settings.objectScale)
+      if (settings.pinDiameter) setPinDiameter(settings.pinDiameter)
+      if (settings.pinPitch) setPinPitch(settings.pinPitch)
+    } catch { window.localStorage.removeItem('blockstl-settings') }
+  }, [])
+
+  useEffect(() => {
+    window.localStorage.setItem('blockstl-settings', JSON.stringify({ blockCount, objectScale, pinDiameter, pinPitch }))
+  }, [blockCount, objectScale, pinDiameter, pinPitch])
+
   const cuts = useMemo(() => {
     if (!mesh) return []
     const [minZ, maxZ] = [mesh.bounds.min[2], mesh.bounds.max[2]]
     return Array.from({ length: blockCount - 1 }, (_, index) => minZ + ((index + 1) * (maxZ - minZ)) / blockCount)
   }, [blockCount, mesh])
+
+  const scaledBounds = useMemo(() => mesh ? [
+    (mesh.bounds.max[0] - mesh.bounds.min[0]) * objectScale,
+    (mesh.bounds.max[1] - mesh.bounds.min[1]) * objectScale,
+    (mesh.bounds.max[2] - mesh.bounds.min[2]) * objectScale,
+  ] : null, [mesh, objectScale])
+  const connectorError = pinPitch < pinDiameter + 1 ? 'Grid pitch must be at least pin diameter + 1 mm.' : ''
 
   async function openFile(file: File | undefined) {
     if (!file) return
@@ -62,14 +91,15 @@ export default function App() {
   }
 
   function generate() {
-    if (!mesh) return
+    if (!mesh || connectorError) return
     setFiles([]); setConnectors([]); setError('')
-    worker.current?.postMessage({ type: 'GENERATE_BLOCKS', settings: { blockCount, pinDiameter, pinPitch, pinHeight: Math.max(4, pinDiameter * 1.25), socketClearance: 0.25 } } satisfies WorkerRequest)
+    setBusy(true)
+    worker.current?.postMessage({ type: 'GENERATE_BLOCKS', settings: { blockCount, objectScale, pinDiameter, pinPitch, pinHeight: Math.max(4, pinDiameter * 1.25), socketClearance: 0.25 } } satisfies WorkerRequest)
   }
 
   function download(file: GeneratedFile) {
     const url = URL.createObjectURL(new Blob([file.buffer], { type: 'model/stl' }))
-    const anchor = document.createElement('a'); anchor.href = url; anchor.download = file.name; anchor.click(); URL.revokeObjectURL(url)
+    const anchor = document.createElement('a'); anchor.href = url; anchor.download = file.name; anchor.click(); window.setTimeout(() => URL.revokeObjectURL(url), 250)
   }
 
   return (
@@ -87,6 +117,7 @@ export default function App() {
             <input type="file" accept=".stl,model/stl" onChange={(event) => void openFile(event.target.files?.[0])} />
             <span>Open STL</span><small>Binary & ASCII</small>
           </label>
+          <p className="drop-help">Or drop an STL anywhere on the preview.</p>
           <button className="link-button" onClick={loadDemo}>Try a demo cube</button>
 
           <div className="section-heading"><span>SPLIT PLAN</span><i /></div>
@@ -99,17 +130,20 @@ export default function App() {
             <input type="number" min="0.1" max="10" step="0.1" value={objectScale} onChange={(event) => setObjectScale(Number(event.target.value) || 1)} />
           </label>
 
-          <div className="section-heading"><span>CONNECTORS <em>planned</em></span><i /></div>
+          <div className="section-heading"><span>CONNECTORS <em>MVP</em></span><i /></div>
           <label className="field compact"><span>Pin diameter <output>{pinDiameter} mm</output></span><input type="number" min="1" max="20" value={pinDiameter} onChange={(event) => setPinDiameter(Number(event.target.value) || 1)} /></label>
           <label className="field compact"><span>Grid pitch <output>{pinPitch} mm</output></span><input type="number" min="2" max="50" value={pinPitch} onChange={(event) => setPinPitch(Number(event.target.value) || 2)} /></label>
 
-          <button className="generate" disabled={!mesh} onClick={generate}>Generate blocks <span>→</span></button>
-          <p className="phase-note">Generation runs in the worker with Manifold WASM: watertight cuts, cylindrical pins/sockets, validation, and binary STL export.</p>
+          {connectorError && <p className="setting-error">{connectorError}</p>}
+
+          <button className="generate" disabled={!mesh || busy || Boolean(connectorError)} onClick={generate}>{busy ? 'Generating…' : 'Generate blocks'} <span>→</span></button>
+          <p className="phase-note">Scale applies to both the preview and generated STL. The model stays in your browser; only selected files are processed.</p>
         </aside>
 
-        <section className="canvas-area">
+        <section className={`canvas-area ${dropActive ? 'drop-active' : ''}`} onDragEnter={(event) => { event.preventDefault(); setDropActive(true) }} onDragOver={(event) => event.preventDefault()} onDragLeave={(event) => { if (event.currentTarget === event.target) setDropActive(false) }} onDrop={(event) => { event.preventDefault(); setDropActive(false); void openFile(event.dataTransfer.files[0]) }}>
           <div className="canvas-topline"><span>{mesh ? mesh.name : 'No model loaded'}</span><span className="hint">drag to orbit · scroll to zoom</span></div>
-          {mesh ? <Viewer mesh={mesh} blockCount={blockCount} objectScale={objectScale} connectors={connectors} /> : <EmptyState onDemo={loadDemo} />}
+          {mesh && <button className="view-reset" onClick={() => setViewerVersion((value) => value + 1)}>Reset view</button>}
+          {mesh ? <Viewer key={viewerVersion} mesh={mesh} blockCount={blockCount} objectScale={objectScale} connectors={connectors} /> : <EmptyState onDemo={loadDemo} />}
           {mesh && <div className="legend">{Array.from({ length: blockCount }, (_, index) => <span key={index}><b style={{ background: ['#3d7eff', '#9c75ff', '#f46f9d', '#f6a443', '#3bc3a1', '#5db5f2', '#e87bc1'][index] }} />Block {index + 1}</span>)}</div>}
           {files.length > 0 && <div className="downloads"><strong>Generated STL files</strong>{files.map((file) => <button key={file.name} onClick={() => download(file)}>{file.name}<small>{file.triangles.toLocaleString()} triangles</small></button>)}</div>}
         </section>
@@ -119,14 +153,14 @@ export default function App() {
           {mesh ? <>
             <dl>
               <div><dt>Triangles</dt><dd>{mesh.triangles.toLocaleString()}</dd></div>
-              <div><dt>Bounds X</dt><dd>{extent(mesh.bounds.min[0], mesh.bounds.max[0])}</dd></div>
-              <div><dt>Bounds Y</dt><dd>{extent(mesh.bounds.min[1], mesh.bounds.max[1])}</dd></div>
-              <div><dt>Bounds Z</dt><dd>{extent(mesh.bounds.min[2], mesh.bounds.max[2])}</dd></div>
+              <div><dt>Output X</dt><dd>{formatter.format(scaledBounds![0])} mm</dd></div>
+              <div><dt>Output Y</dt><dd>{formatter.format(scaledBounds![1])} mm</dd></div>
+              <div><dt>Output Z</dt><dd>{formatter.format(scaledBounds![2])} mm</dd></div>
             </dl>
             <div className="section-heading cut-heading"><span>CUT POSITIONS</span><i /></div>
             <ol className="cuts">{cuts.map((cut, index) => <li key={cut}><span>Interface {index + 1}</span><strong>Z {formatter.format(cut)}</strong></li>)}</ol>
           </> : <p className="muted">A loaded STL will show triangle count, bounds, and evenly spaced Z cuts here.</p>}
-          <div className={`status ${error ? 'error' : ''}`}><span className="status-dot" />{error || status}</div>
+          <div className={`status ${error ? 'error' : ''} ${busy ? 'working' : ''}`}><span className="status-dot" />{error || status}</div>
         </aside>
       </section>
     </main>

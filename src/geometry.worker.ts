@@ -90,7 +90,10 @@ function connectorPlan(source: any, bounds: Bounds, settings: GeneratorSettings)
     const firstY = centerY + Math.ceil((min[1] - centerY) / settings.pinPitch) * settings.pinPitch
     for (let x = firstX; x <= max[0]; x += settings.pinPitch) for (let y = firstY; y <= max[1]; y += settings.pinPitch) {
       const point: [number, number] = [x, y]
-      if (sections.every((loops) => pointInside(point, loops) && distanceToEdges(point, loops) >= requiredMargin)) plan.push({ x, y, z })
+      if (sections.every((loops) => pointInside(point, loops) && distanceToEdges(point, loops) >= requiredMargin)) {
+        if (plan.length >= 160) throw new Error('이 설정에서는 인터페이스당 커넥터가 160개를 넘습니다. Grid pitch를 높여 주세요.')
+        plan.push({ x, y, z })
+      }
     }
     plans.push(plan)
   }
@@ -116,11 +119,13 @@ async function generate(settings: GeneratorSettings) {
   if (!sourcePositions) throw new Error('먼저 STL 파일을 불러와 주세요.')
   post({ type: 'PROGRESS', message: 'Initializing the robust geometry engine…' })
   const wasm = await Module(); wasm.setup()
-  const bounds = boundsOf(sourcePositions); const source = new wasm.Manifold(makeSourceMesh(wasm, sourcePositions))
-  const connectors = connectorPlan(source, bounds, settings)
+  const scaledPositions = new Float32Array(sourcePositions.length)
+  for (let index = 0; index < sourcePositions.length; index += 1) scaledPositions[index] = sourcePositions[index] * settings.objectScale
+  const bounds = boundsOf(scaledPositions); const source = new wasm.Manifold(makeSourceMesh(wasm, scaledPositions))
   const margin = Math.max(bounds.max[0] - bounds.min[0], bounds.max[1] - bounds.min[1], bounds.max[2] - bounds.min[2]) * 0.02 + 1
   const files: GeneratedFile[] = []
   try {
+    const connectors = connectorPlan(source, bounds, settings)
     for (let index = 0; index < settings.blockCount; index += 1) {
       post({ type: 'PROGRESS', message: `Creating watertight block ${index + 1} of ${settings.blockCount}…` })
       const lower = bounds.min[2] + ((bounds.max[2] - bounds.min[2]) * index) / settings.blockCount
@@ -140,8 +145,8 @@ async function generate(settings: GeneratorSettings) {
       const result = block.getMesh(); const buffer = binaryStl(result); const triangles = result.triVerts.length / 3; block.delete()
       files.push({ name: `${sourceName.replace(/\.stl$/i, '')}_block_${String(index + 1).padStart(2, '0')}.stl`, buffer, triangles })
     }
+    post({ type: 'GENERATION_COMPLETE', files, connectors }, files.map((file) => file.buffer))
   } finally { source.delete() }
-  post({ type: 'GENERATION_COMPLETE', files, connectors }, files.map((file) => file.buffer))
 }
 
 scope.onmessage = async (event: MessageEvent<WorkerRequest>) => {
