@@ -78,10 +78,14 @@ function distanceToEdges(point: [number, number], loops: number[][][]) {
 function connectorPlan(source: any, bounds: Bounds, settings: GeneratorSettings) {
   const plans: ConnectorPosition[][] = []
   const { min, max } = bounds
-  const requiredMargin = settings.pinDiameter / 2 + settings.socketClearance + 0.5
+  const springThickness = Math.max(0.75, Math.min(1.2, settings.pinDiameter * 0.14))
+  const cellWidth = settings.pinDiameter - settings.springPreload + springThickness * 2 + 1.2
+  const cellDepth = settings.pinDiameter + settings.socketClearance * 2
+  const requiredMargin = Math.max(cellWidth, cellDepth) / 2 + 0.5
+  if (settings.pinPitch < cellWidth + 0.8) throw new Error(`핀 간격이 너무 좁습니다. 현재 설정에서는 ${Math.ceil((cellWidth + 0.8) * 10) / 10} mm 이상이 필요합니다.`)
   for (let interfaceIndex = 1; interfaceIndex < settings.blockCount; interfaceIndex += 1) {
     const z = min[2] + ((max[2] - min[2]) * interfaceIndex) / settings.blockCount
-    const sections = [-settings.pinHeight * 0.55, 0, settings.pinHeight * 0.55].map((offset) => {
+    const sections = [-settings.pinHeight * 0.9, 0, settings.pinHeight * 0.9].map((offset) => {
       const section = source.slice(z + offset); const polygons = section.toPolygons() as number[][][]; section.delete(); return polygons
     })
     const plan: ConnectorPosition[] = []
@@ -91,10 +95,11 @@ function connectorPlan(source: any, bounds: Bounds, settings: GeneratorSettings)
     for (let x = firstX; x <= max[0]; x += settings.pinPitch) for (let y = firstY; y <= max[1]; y += settings.pinPitch) {
       const point: [number, number] = [x, y]
       if (sections.every((loops) => pointInside(point, loops) && distanceToEdges(point, loops) >= requiredMargin)) {
-        if (plan.length >= 160) throw new Error('이 설정에서는 인터페이스당 커넥터가 160개를 넘습니다. Grid pitch를 높여 주세요.')
+        if (plan.length >= 160) throw new Error('결합부가 한 분할면에 160개를 넘습니다. 핀 간격을 늘려 주세요.')
         plan.push({ x, y, z })
       }
     }
+    if (!plan.length) throw new Error(`분할면 ${interfaceIndex}에 결합부를 배치할 공간이 없습니다. 핀 지름이나 간격을 줄여 주세요.`)
     plans.push(plan)
   }
   return plans
@@ -117,30 +122,55 @@ function binaryStl(mesh: { numProp: number; vertProperties: Float32Array; triVer
 
 async function generate(settings: GeneratorSettings) {
   if (!sourcePositions) throw new Error('먼저 STL 파일을 불러와 주세요.')
-  post({ type: 'PROGRESS', message: 'Initializing the robust geometry engine…' })
+  post({ type: 'PROGRESS', message: '모델의 분할면과 결합 위치를 분석하고 있습니다…' })
   const wasm = await Module(); wasm.setup()
   const scaledPositions = new Float32Array(sourcePositions.length)
   for (let index = 0; index < sourcePositions.length; index += 1) scaledPositions[index] = sourcePositions[index] * settings.objectScale
   const bounds = boundsOf(scaledPositions); const source = new wasm.Manifold(makeSourceMesh(wasm, scaledPositions))
   const margin = Math.max(bounds.max[0] - bounds.min[0], bounds.max[1] - bounds.min[1], bounds.max[2] - bounds.min[2]) * 0.02 + 1
+  const blockHeight = (bounds.max[2] - bounds.min[2]) / settings.blockCount
+  const roofThickness = Math.max(1.2, settings.pinDiameter * 0.22)
+  if (blockHeight < settings.pinHeight + roofThickness) throw new Error(`블록 한 층의 높이가 결합부보다 얇습니다. 블록 개수를 줄이거나 핀 지름을 줄여 주세요.`)
   const files: GeneratedFile[] = []
   try {
     const connectors = connectorPlan(source, bounds, settings)
     for (let index = 0; index < settings.blockCount; index += 1) {
-      post({ type: 'PROGRESS', message: `Creating watertight block ${index + 1} of ${settings.blockCount}…` })
+      post({ type: 'PROGRESS', message: `블록 ${index + 1}/${settings.blockCount} 생성 중…` })
       const lower = bounds.min[2] + ((bounds.max[2] - bounds.min[2]) * index) / settings.blockCount
       const upper = bounds.min[2] + ((bounds.max[2] - bounds.min[2]) * (index + 1)) / settings.blockCount
       const cutter = wasm.Manifold.cube([bounds.max[0] - bounds.min[0] + margin * 2, bounds.max[1] - bounds.min[1] + margin * 2, upper - lower], false).translate(bounds.min[0] - margin, bounds.min[1] - margin, lower)
       let block = source.intersect(cutter); cutter.delete()
-      // Lower blocks carry pins on top. Upper blocks receive matching cylindrical sockets underneath.
+      // Lower blocks carry tapered round studs. Upper blocks use compliant leaf-spring cells.
       if (index < settings.blockCount - 1) for (const pin of connectors[index]) {
-        const shape = wasm.Manifold.cylinder(settings.pinHeight + 0.6, settings.pinDiameter / 2, settings.pinDiameter / 2, 24).translate(pin.x, pin.y, pin.z - 0.6)
+        const radius = settings.pinDiameter / 2
+        const embed = 0.65
+        const leadHeight = Math.min(1, settings.pinHeight * 0.22)
+        const body = wasm.Manifold.cylinder(settings.pinHeight - leadHeight + embed, radius, radius, 28).translate(pin.x, pin.y, pin.z - embed)
+        const lead = wasm.Manifold.cylinder(leadHeight, radius, radius * 0.74, 28).translate(pin.x, pin.y, pin.z + settings.pinHeight - leadHeight)
+        const shape = body.add(lead); body.delete(); lead.delete()
         const next = block.add(shape); block.delete(); shape.delete(); block = next
       }
       if (index > 0) for (const pin of connectors[index - 1]) {
-        const radius = settings.pinDiameter / 2 + settings.socketClearance
-        const shape = wasm.Manifold.cylinder(settings.pinHeight + 0.2, radius, radius, 24).translate(pin.x, pin.y, pin.z - 0.02)
-        const next = block.subtract(shape); block.delete(); shape.delete(); block = next
+        const springThickness = Math.max(0.75, Math.min(1.2, settings.pinDiameter * 0.14))
+        const springGap = settings.pinDiameter - settings.springPreload
+        const deflectionRoom = 0.6
+        const cellWidth = springGap + springThickness * 2 + deflectionRoom * 2
+        const cellDepth = settings.pinDiameter + settings.socketClearance * 2
+        const socketDepth = settings.pinHeight + 0.35
+        const leadDepth = Math.min(0.8, socketDepth * 0.18)
+
+        const cavity = wasm.Manifold.cube([cellWidth, cellDepth, socketDepth + 0.08], false).translate(pin.x - cellWidth / 2, pin.y - cellDepth / 2, pin.z - 0.04)
+        const entrance = wasm.Manifold.cube([cellWidth + 0.5, cellDepth + 0.5, leadDepth + 0.04], false).translate(pin.x - (cellWidth + 0.5) / 2, pin.y - (cellDepth + 0.5) / 2, pin.z - 0.04)
+        const socketVoid = cavity.add(entrance); cavity.delete(); entrance.delete()
+        let next = block.subtract(socketVoid); block.delete(); socketVoid.delete(); block = next
+
+        const beamWidth = Math.max(2.2, settings.pinDiameter * 0.56)
+        const beamLength = socketDepth - leadDepth * 0.45 + 0.25
+        const beamZ = pin.z + leadDepth * 0.45
+        const leftBeam = wasm.Manifold.cube([springThickness, beamWidth, beamLength], false).translate(pin.x - springGap / 2 - springThickness, pin.y - beamWidth / 2, beamZ)
+        const rightBeam = wasm.Manifold.cube([springThickness, beamWidth, beamLength], false).translate(pin.x + springGap / 2, pin.y - beamWidth / 2, beamZ)
+        const springs = leftBeam.add(rightBeam); leftBeam.delete(); rightBeam.delete()
+        next = block.add(springs); block.delete(); springs.delete(); block = next
       }
       const result = block.getMesh(); const buffer = binaryStl(result); const triangles = result.triVerts.length / 3; block.delete()
       files.push({ name: `${sourceName.replace(/\.stl$/i, '')}_block_${String(index + 1).padStart(2, '0')}.stl`, buffer, triangles })
@@ -152,7 +182,7 @@ async function generate(settings: GeneratorSettings) {
 scope.onmessage = async (event: MessageEvent<WorkerRequest>) => {
   try {
     if (event.data.type === 'LOAD_STL') {
-      post({ type: 'PROGRESS', message: 'STL geometry is being parsed in the worker…' })
+      post({ type: 'PROGRESS', message: 'STL 모델을 읽고 있습니다…' })
       const positions = isBinaryStl(event.data.buffer) ? parseBinary(event.data.buffer) : parseAscii(event.data.buffer)
       sourcePositions = positions.slice(); sourceName = event.data.name
       const mesh = { name: sourceName, triangles: positions.length / 9, bounds: boundsOf(positions), positions }

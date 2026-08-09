@@ -17,6 +17,7 @@ export type GeneratorSettings = {
   pinPitch: number
   pinHeight: number
   socketClearance: number
+  springPreload: number
 }
 
 export type ConnectorPosition = { x: number; y: number; z: number }
