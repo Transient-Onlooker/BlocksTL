@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { zipSync } from 'fflate'
+import { zip } from 'fflate'
 import { CONNECTOR_PROFILE, pinDiameterFor, springCellSize } from './connectorProfile'
+import { unitScaleFor } from './geometry/core'
 import Viewer from './Viewer'
 import type { ViewerMode } from './Viewer'
-import type { BlockPreview, ConnectorPosition, FitLevel, GeneratedFile, MeshSummary, QaProjection, WorkerRequest, WorkerResponse } from './types'
+import type { BlockPreview, ConnectorPosition, FitLevel, GeneratedFile, MeshSummary, QaProjection, StlUnit, WorkerRequest, WorkerResponse } from './types'
 
 const formatter = new Intl.NumberFormat('ko-KR', { maximumFractionDigits: 2 })
 const blockColors = ['#aeb7c2', '#17d4e5', '#f044d0', '#ffe34d', '#3866ff', '#38d26b', '#f24d4d', '#9b6cff']
@@ -20,6 +21,7 @@ export default function App() {
   const [mesh, setMesh] = useState<MeshSummary | null>(null)
   const [blockCount, setBlockCount] = useState(4)
   const [objectScale, setObjectScale] = useState(1)
+  const [sourceUnit, setSourceUnit] = useState<StlUnit>('mm')
   const [fitLevel, setFitLevel] = useState<FitLevel>(19)
   const [status, setStatus] = useState('STL 파일을 선택해 시작하세요.')
   const [error, setError] = useState('')
@@ -31,6 +33,7 @@ export default function App() {
   const [dropActive, setDropActive] = useState(false)
   const [viewerVersion, setViewerVersion] = useState(0)
   const [viewerMode, setViewerMode] = useState<ViewerMode>('cut')
+  const [zipBusy, setZipBusy] = useState(false)
 
   useEffect(() => {
     const instance = new Worker(new URL('./geometry.worker.ts', import.meta.url), { type: 'module' })
@@ -88,18 +91,19 @@ export default function App() {
     const saved = window.localStorage.getItem('blockstl-settings')
     if (!saved) return
     try {
-      const settings = JSON.parse(saved) as { blockCount?: number; objectScale?: number; fitLevel?: number }
+      const settings = JSON.parse(saved) as { blockCount?: number; objectScale?: number; fitLevel?: number; sourceUnit?: StlUnit }
       if (settings.blockCount && settings.blockCount >= 2 && settings.blockCount <= 8) setBlockCount(settings.blockCount)
       if (settings.objectScale && settings.objectScale >= 0.25 && settings.objectScale <= 2) setObjectScale(settings.objectScale)
       if (settings.fitLevel === 19 || settings.fitLevel === 20 || settings.fitLevel === 21) setFitLevel(settings.fitLevel)
+      if (settings.sourceUnit === 'mm' || settings.sourceUnit === 'inch') setSourceUnit(settings.sourceUnit)
     } catch {
       window.localStorage.removeItem('blockstl-settings')
     }
   }, [])
 
   useEffect(() => {
-    window.localStorage.setItem('blockstl-settings', JSON.stringify({ blockCount, objectScale, fitLevel }))
-  }, [blockCount, objectScale, fitLevel])
+    window.localStorage.setItem('blockstl-settings', JSON.stringify({ blockCount, objectScale, fitLevel, sourceUnit }))
+  }, [blockCount, objectScale, fitLevel, sourceUnit])
 
   const cuts = useMemo(() => {
     if (!mesh) return []
@@ -107,11 +111,12 @@ export default function App() {
     return Array.from({ length: blockCount - 1 }, (_, index) => minZ + ((index + 1) * (maxZ - minZ)) / blockCount)
   }, [blockCount, mesh])
 
+  const modelScale = objectScale * unitScaleFor(sourceUnit)
   const scaledBounds = useMemo(() => mesh ? [
-    (mesh.bounds.max[0] - mesh.bounds.min[0]) * objectScale,
-    (mesh.bounds.max[1] - mesh.bounds.min[1]) * objectScale,
-    (mesh.bounds.max[2] - mesh.bounds.min[2]) * objectScale,
-  ] : null, [mesh, objectScale])
+    (mesh.bounds.max[0] - mesh.bounds.min[0]) * modelScale,
+    (mesh.bounds.max[1] - mesh.bounds.min[1]) * modelScale,
+    (mesh.bounds.max[2] - mesh.bounds.min[2]) * modelScale,
+  ] : null, [mesh, modelScale])
 
   const pinDiameter = pinDiameterFor(fitLevel)
   const springCell = springCellSize()
@@ -120,8 +125,11 @@ export default function App() {
   const connectorError = blockLayerHeight < CONNECTOR_PROFILE.pinHeightMm + CONNECTOR_PROFILE.roofThicknessMm
     ? '블록 한 층이 결합부보다 얇습니다. 블록 수를 줄이거나 출력 크기를 키워 주세요.'
     : ''
+  const unitWarning = scaledBounds && (scaledBounds[2] < 5 || Math.max(...scaledBounds) > 2_000)
+    ? `높이 ${formatter.format(scaledBounds[2])} mm — STL 좌표 단위가 ${sourceUnit === 'mm' ? 'mm' : 'inch'}인지 확인하세요.`
+    : ''
   const connectorTotal = connectors.reduce((total, plan) => total + plan.length, 0)
-  const busy = operation !== null
+  const busy = operation !== null || zipBusy
 
   function changeOperation(value: 'load' | 'blocks' | 'fit-test' | null) {
     activeOperation.current = value
@@ -166,7 +174,7 @@ export default function App() {
     setError('')
     changeOperation('blocks')
     setStatus('블록 생성을 시작합니다…')
-    worker.current?.postMessage({ type: 'GENERATE_BLOCKS', settings: { blockCount, objectScale, fitLevel } } satisfies WorkerRequest)
+    worker.current?.postMessage({ type: 'GENERATE_BLOCKS', settings: { blockCount, objectScale, fitLevel, sourceUnit } } satisfies WorkerRequest)
   }
 
   function changeBlockCount(value: number) {
@@ -176,6 +184,11 @@ export default function App() {
 
   function changeObjectScale(value: number) {
     setObjectScale(value)
+    clearGeneratedResult()
+  }
+
+  function changeSourceUnit(value: StlUnit) {
+    setSourceUnit(value)
     clearGeneratedResult()
   }
 
@@ -192,10 +205,10 @@ export default function App() {
     if (mesh) setStatus('설정이 변경되었습니다. 블록을 다시 생성해 주세요.')
   }
 
-  function prepareFitTest() {
+  async function prepareFitTest() {
     if (busy) return
     if (couponFiles.length) {
-      downloadArchive(couponFiles, 'BlocksTL_fit_test_19-20-21.zip', calibrationGuide())
+      await createArchive(couponFiles, 'BlocksTL_fit_test_19-20-21.zip', calibrationGuide())
       return
     }
     setError('')
@@ -208,10 +221,24 @@ export default function App() {
     saveBlob(new Blob([file.buffer], { type: 'model/stl' }), file.name)
   }
 
-  function downloadAll() {
+  async function downloadAll() {
     if (!files.length) return
     const baseName = mesh?.name.replace(/\.stl$/i, '') || 'blockstl'
-    downloadArchive(files, `${baseName}_blocks.zip`)
+    await createArchive(files, `${baseName}_blocks.zip`)
+  }
+
+  async function createArchive(archiveFiles: GeneratedFile[], name: string, guide?: string) {
+    setZipBusy(true)
+    setError('')
+    setStatus('ZIP 파일을 백그라운드에서 만들고 있습니다…')
+    try {
+      await downloadArchive(archiveFiles, name, guide)
+      setStatus('ZIP 다운로드가 준비되었습니다.')
+    } catch (archiveError) {
+      setError(archiveError instanceof Error ? archiveError.message : 'ZIP 생성 중 오류가 발생했습니다.')
+    } finally {
+      setZipBusy(false)
+    }
   }
 
   return (
@@ -235,6 +262,15 @@ export default function App() {
             <small>Binary · ASCII, 기기에서 바로 처리</small>
           </label>
           <button className="sample-button" disabled={busy} onClick={loadDemo}>샘플 모델로 체험하기 <span>→</span></button>
+
+          <div className="field unit-field">
+            <span>STL 좌표 단위 <output>{sourceUnit === 'mm' ? 'mm' : 'inch → mm'}</output></span>
+            <div className="unit-options" role="group" aria-label="STL 좌표 단위">
+              <button type="button" disabled={busy} className={sourceUnit === 'mm' ? 'active' : ''} onClick={() => changeSourceUnit('mm')}>mm</button>
+              <button type="button" disabled={busy} className={sourceUnit === 'inch' ? 'active' : ''} onClick={() => changeSourceUnit('inch')}>inch</button>
+            </div>
+            <small className="field-note">STL에는 단위 정보가 없습니다. +Z 방향을 모델 높이로 사용합니다.</small>
+          </div>
 
           <StepTitle number="2" title="분할 설정" />
           <label className="field">
@@ -267,9 +303,10 @@ export default function App() {
             <small>보정 수핀 Ø {pinDiameter.toFixed(1)} mm · 높이 {CONNECTOR_PROFILE.pinHeightMm} mm · 스프링 목 {CONNECTOR_PROFILE.springGapMm} mm · 간섭 {interference.toFixed(2)} mm · 셀 {springCell.width.toFixed(2)} × {springCell.depth.toFixed(2)} mm</small>
           </div>
           <button className={`fit-test-button ${couponFiles.length ? 'ready' : ''}`} type="button" disabled={busy} onClick={prepareFitTest}>
-            {operation === 'fit-test' ? <><span className="spinner" /> 테스트 조각 생성 중…</> : couponFiles.length ? '맞춤 테스트 ZIP 받기' : '19·20·21 맞춤 테스트 STL 만들기'}
+            {zipBusy ? <><span className="spinner" /> ZIP 만드는 중…</> : operation === 'fit-test' ? <><span className="spinner" /> 테스트 조각 생성 중…</> : couponFiles.length ? '맞춤 테스트 ZIP 받기' : '19·20·21 맞춤 테스트 STL 만들기'}
           </button>
           <small className="fit-test-note">본 출력 전에 6개의 작은 암·수 조각으로 프린터 공차를 확인하세요.</small>
+          {unitWarning && <p className="unit-warning">{unitWarning}</p>}
           {connectorError && <p className="setting-error">{connectorError}</p>}
 
           <button className="generate" disabled={!mesh || busy || Boolean(connectorError)} onClick={generate}>
@@ -290,8 +327,8 @@ export default function App() {
           {dropActive && <div className="drop-overlay"><strong>여기에 놓으세요</strong><span>STL 파일을 바로 열 수 있습니다.</span></div>}
           {mesh
             ? viewerMode === 'results'
-              ? <ResultPanel files={files} previews={blockPreviews} connectorTotal={connectorTotal} busy={operation === 'blocks'} onDownload={download} onDownloadAll={downloadAll} />
-              : <Viewer key={`${viewerVersion}-${viewerMode}`} mesh={mesh} blockCount={blockCount} objectScale={objectScale} connectors={connectors} connectorDiameter={pinDiameter} mode={viewerMode} />
+              ? <ResultPanel files={files} previews={blockPreviews} connectorTotal={connectorTotal} busy={operation === 'blocks'} archiveBusy={zipBusy} onDownload={download} onDownloadAll={downloadAll} />
+              : <Viewer key={`${viewerVersion}-${viewerMode}`} mesh={mesh} blockCount={blockCount} modelScale={modelScale} connectors={connectors} connectorDiameter={pinDiameter} mode={viewerMode} />
             : <EmptyState onOpen={() => fileInput.current?.click()} onDemo={loadDemo} />}
           {mesh && viewerMode !== 'results' && <div className="viewer-hint">{viewerMode === 'cut' ? 'Z 높이별 분할 결과 · 수평선이 실제 절단면입니다' : '마우스로 회전 · 휠로 확대/축소 · Z축이 위쪽입니다'}</div>}
           {mesh && viewerMode === 'cut' && <div className="legend">{Array.from({ length: blockCount }, (_, index) => <span key={index}><b style={{ background: blockColors[index] }} />블록 {index + 1}</span>)}</div>}
@@ -308,7 +345,7 @@ export default function App() {
               <div><dt>높이</dt><dd>{formatter.format(scaledBounds[2])} mm</dd></div>
             </dl>
             <div className="inspector-title secondary"><span>분할 위치</span><small>{cuts.length}곳</small></div>
-            <ol className="cuts">{cuts.map((cut, index) => <li key={cut}><span>분할면 {index + 1}</span><strong>Z {formatter.format(cut * objectScale)} mm</strong></li>)}</ol>
+            <ol className="cuts">{cuts.map((cut, index) => <li key={cut}><span>분할면 {index + 1}</span><strong>Z {formatter.format(cut * modelScale)} mm</strong></li>)}</ol>
           </> : <div className="inspector-empty"><span aria-hidden="true">◇</span><p>STL 파일을 열면 모델 크기와 분할 위치를 확인할 수 있습니다.</p></div>}
           <div className={`status-card ${error ? 'error' : ''} ${busy ? 'working' : ''}`}>
             <span className="status-dot" />
@@ -334,10 +371,10 @@ function EmptyState({ onOpen, onDemo }: { onOpen: () => void; onDemo: () => void
   </div>
 }
 
-function ResultPanel({ files, previews, connectorTotal, busy, onDownload, onDownloadAll }: { files: GeneratedFile[]; previews: BlockPreview[]; connectorTotal: number; busy: boolean; onDownload: (file: GeneratedFile) => void; onDownloadAll: () => void }) {
+function ResultPanel({ files, previews, connectorTotal, busy, archiveBusy, onDownload, onDownloadAll }: { files: GeneratedFile[]; previews: BlockPreview[]; connectorTotal: number; busy: boolean; archiveBusy: boolean; onDownload: (file: GeneratedFile) => void; onDownloadAll: () => void }) {
   const visibleConnectorTotal = connectorTotal || previews.reduce((total, preview) => total + preview.topConnectorCount, 0)
   return <div className="results qa-results">
-    <div className="results-head"><div><span className={`success-check ${busy ? 'working' : ''}`}>{busy ? <span className="spinner" /> : '✓'}</span><span><strong>{busy ? `실제 블록 생성 중 · ${previews.length}개 확인 가능` : '블록 형상 QA 완료'}</strong><small>핀·소켓이 보이는지 확인하세요 · 결합부 {visibleConnectorTotal}개</small></span></div><button disabled={busy || !files.length} onClick={onDownloadAll}>{busy ? '생성 중…' : 'ZIP으로 모두 받기'}</button></div>
+    <div className="results-head"><div><span className={`success-check ${busy || archiveBusy ? 'working' : ''}`}>{busy || archiveBusy ? <span className="spinner" /> : '✓'}</span><span><strong>{busy ? `실제 블록 생성 중 · ${previews.length}개 확인 가능` : archiveBusy ? 'ZIP을 백그라운드에서 만드는 중' : '블록 형상 QA 완료'}</strong><small>핀·소켓이 보이는지 확인하세요 · 결합부 {visibleConnectorTotal}개</small></span></div><button disabled={busy || archiveBusy || !files.length} onClick={onDownloadAll}>{busy ? '생성 중…' : archiveBusy ? 'ZIP 만드는 중…' : 'ZIP으로 모두 받기'}</button></div>
     <div className="qa-grid">{previews.map((preview) => {
       const file = files[preview.index]
       return <article className="qa-card" key={preview.index}>
@@ -378,8 +415,16 @@ function QaCanvas({ projection }: { projection: QaProjection }) {
 function downloadArchive(files: GeneratedFile[], name: string, guide?: string) {
   const entries: Record<string, Uint8Array> = Object.fromEntries(files.map((file) => [file.name, new Uint8Array(file.buffer)]))
   if (guide) entries['먼저_읽어주세요.txt'] = new TextEncoder().encode(guide)
-  const archive = zipSync(entries)
-  saveBlob(new Blob([archive as BlobPart], { type: 'application/zip' }), name)
+  return new Promise<void>((resolve, reject) => {
+    zip(entries, { level: 1 }, (error, archive) => {
+      if (error) {
+        reject(error)
+        return
+      }
+      saveBlob(new Blob([archive as BlobPart], { type: 'application/zip' }), name)
+      resolve()
+    })
+  })
 }
 
 function calibrationGuide() {

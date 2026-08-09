@@ -39,6 +39,8 @@ BLOCK_GENERATED progressive QA
 
 현재 Spring Socket 치수는 원본 치수의 확정 복원값이 아니다. `video estimate + print coupon`에서 시작한 실험 프로필이며, 실제 PLA coupon의 삽입력·유격·분리력·반복 내구성 결과가 들어오기 전에는 임의로 V2 치수를 확정하지 않는다.
 
+STL에는 단위 정보가 없으므로 UI에서 `mm` 또는 `inch`를 선택한다. 내부 geometry core는 inch 입력에 25.4를 적용하며, +Z를 높이/분할축으로 사용한다. Connector 치수는 이 모델 변환과 무관한 실제 mm 값이다.
+
 남은 우선순위:
 
 ```text

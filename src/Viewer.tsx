@@ -9,7 +9,7 @@ export type ViewerMode = 'cut' | 'results' | 'inspect'
 type Props = {
   mesh: MeshSummary
   blockCount: number
-  objectScale: number
+  modelScale: number
   connectors: ConnectorPosition[][]
   connectorDiameter: number
   mode: Exclude<ViewerMode, 'results'>
@@ -17,7 +17,7 @@ type Props = {
 
 const palette = ['#aeb7c2', '#17d4e5', '#f044d0', '#ffe34d', '#3866ff', '#38d26b', '#f24d4d', '#9b6cff']
 
-export default function Viewer({ mesh, blockCount, objectScale, connectors, connectorDiameter, mode }: Props) {
+export default function Viewer({ mesh, blockCount, modelScale, connectors, connectorDiameter, mode }: Props) {
   const mount = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -34,11 +34,11 @@ export default function Viewer({ mesh, blockCount, objectScale, connectors, conn
     const sourceWidth = Math.max(max[0] - min[0], 1e-6)
     const sourceDepth = Math.max(max[1] - min[1], 1e-6)
     const sourceHeight = Math.max(max[2] - min[2], 1e-6)
-    const width = sourceWidth * objectScale
-    const depth = sourceDepth * objectScale
-    const height = sourceHeight * objectScale
+    const width = sourceWidth * modelScale
+    const depth = sourceDepth * modelScale
+    const height = sourceHeight * modelScale
     const size = Math.max(width, depth, height)
-    const scaledCenter = center.clone().multiplyScalar(objectScale)
+    const scaledCenter = center.clone().multiplyScalar(modelScale)
 
     const colors = new Float32Array(mesh.previewPositions.length)
     const color = new THREE.Color()
@@ -59,7 +59,7 @@ export default function Viewer({ mesh, blockCount, objectScale, connectors, conn
       depthWrite: true,
     })
     const points = new THREE.Points(geometry, material)
-    points.scale.setScalar(objectScale)
+    points.scale.setScalar(modelScale)
     points.position.copy(scaledCenter).multiplyScalar(-1)
     scene.add(points)
 
@@ -71,7 +71,7 @@ export default function Viewer({ mesh, blockCount, objectScale, connectors, conn
       camera.position.set(0, -Math.max(depth * 2.5, size * 1.8, 10), 0)
       camera.lookAt(0, 0, 0)
       for (let cut = 1; cut < blockCount; cut += 1) {
-        const z = ((min[2] + (sourceHeight * cut) / blockCount) * objectScale) - scaledCenter.z
+        const z = ((min[2] + (sourceHeight * cut) / blockCount) * modelScale) - scaledCenter.z
         const guideMaterial = new THREE.LineBasicMaterial({ color: '#dbe8f8', transparent: true, opacity: 0.72, depthTest: false })
         const guide = new THREE.Line(
           new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(-size * 20, -depth / 2 - 0.1, z), new THREE.Vector3(size * 20, -depth / 2 - 0.1, z)]),
@@ -96,7 +96,7 @@ export default function Viewer({ mesh, blockCount, objectScale, connectors, conn
       scene.add(grid)
 
       for (let cut = 1; cut < blockCount; cut += 1) {
-        const z = ((min[2] + (sourceHeight * cut) / blockCount) * objectScale) - scaledCenter.z
+        const z = ((min[2] + (sourceHeight * cut) / blockCount) * modelScale) - scaledCenter.z
         const line = new THREE.LineSegments(
           new THREE.EdgesGeometry(new THREE.PlaneGeometry(width * 1.12, depth * 1.12)),
           new THREE.LineBasicMaterial({ color: '#dce9ff', transparent: true, opacity: 0.56 }),
@@ -151,7 +151,7 @@ export default function Viewer({ mesh, blockCount, objectScale, connectors, conn
       renderer.dispose()
       if (renderer.domElement.parentElement === host) host.removeChild(renderer.domElement)
     }
-  }, [mesh, blockCount, objectScale, connectors, connectorDiameter, mode])
+  }, [mesh, blockCount, modelScale, connectors, connectorDiameter, mode])
 
   return <div ref={mount} className={`viewer viewer-${mode}`} aria-label={mode === 'cut' ? 'Z 높이별 블록 Cut Preview' : '회전 가능한 3D 점검 보기'} />
 }

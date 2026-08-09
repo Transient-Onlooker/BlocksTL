@@ -52,13 +52,16 @@ npm run dev
 ## Usage
 
 1. `STL 열기`로 모델을 불러옵니다.
-2. 블록 개수와 출력 크기를 정하고 Cut Preview에서 분할 위치를 확인합니다.
-3. 본 출력 전에 `19·20·21 맞춤 테스트 STL 만들기`로 작은 coupon을 출력합니다.
-4. 프린터에 가장 적합한 핀 맞춤 단계를 선택합니다.
-5. `블록 생성하기`를 누르고 Generated Blocks에서 핀·소켓과 외형을 확인합니다.
-6. 개별 STL 또는 ZIP을 받아 슬라이서에서 출력합니다.
+2. STL 좌표 단위를 `mm` 또는 `inch`로 지정합니다. BlocksTL은 **+Z 방향을 모델 높이와 분할축**으로 사용합니다.
+3. 블록 개수와 출력 크기를 정하고 Cut Preview에서 분할 위치를 확인합니다.
+4. 본 출력 전에 `19·20·21 맞춤 테스트 STL 만들기`로 작은 coupon을 출력합니다.
+5. 프린터에 가장 적합한 핀 맞춤 단계를 선택합니다.
+6. `블록 생성하기`를 누르고 Generated Blocks에서 핀·소켓과 외형을 확인합니다.
+7. 개별 STL 또는 ZIP을 받아 슬라이서에서 출력합니다.
 
 중요: **Object Scale은 모델 크기만 바꿉니다. Connector의 물리 치수와 간격은 실제 mm 단위로 고정되어 함께 확대·축소되지 않습니다.** 모델을 너무 작게 만들면 connector가 들어갈 공간이 부족해 생성이 제한될 수 있습니다.
+
+STL 형식 자체에는 단위 메타데이터가 없습니다. BlocksTL은 기본적으로 `STL coordinate 1.0 = 1 mm`로 가정합니다. inch로 내보낸 STL은 UI에서 `inch`를 선택하면 좌표에 25.4를 적용한 뒤 connector를 생성합니다. 표시 크기가 지나치게 작거나 크면 단위 선택을 먼저 확인하세요.
 
 ## Connector fit calibration (19 / 20 / 21)
 
@@ -107,8 +110,8 @@ npm run verify:stl
 npm run verify:geometry
 ```
 
-- `verify:stl`: exact/trailing Binary STL, truncated Binary 거부, 대소문자 ASCII vertex, numeric vertex welding 검사
-- `verify:geometry`: 19/20/21 coupon, 3-way cube split, 중간 블록의 양면 connector, cylinder 안전 영역, thin-neck 거부 검사
+- `verify:stl`: exact/trailing Binary STL, truncated Binary 거부, 대소문자 ASCII vertex, unit scaling, numeric welding, non-finite/degenerate triangle 거부 검사
+- `verify:geometry`: Worker와 동일한 production geometry core를 직접 호출하여 19/20/21 coupon, 3-way cube split, 중간 블록의 양면 connector, cylinder 안전 영역, thin-neck 거부를 검사
 
 CI는 `npm ci → npm run build → npm run verify:stl → npm run verify:geometry → deploy` 순서로 실행하며 하나라도 실패하면 Pages를 배포하지 않습니다.
 
@@ -124,6 +127,7 @@ CI는 `npm ci → npm run build → npm run verify:stl → npm run verify:geomet
 - Spring 치수는 아직 최종 물리 검증값이 아닙니다.
 - 매우 큰 STL 생성은 상당한 JS/WASM 메모리를 사용할 수 있습니다.
 - ASCII STL 파서는 현재 파일 전체를 문자열로 디코딩합니다.
+- STL의 단위와 위쪽 축은 파일에서 자동 판별할 수 없으므로 사용자가 올바른 단위와 +Z 방향을 확인해야 합니다.
 - non-manifold, self-intersecting 또는 병적인 STL은 Manifold 변환이나 Boolean에서 실패할 수 있습니다.
 - 영상만으로는 원본 connector의 정확한 topology와 치수를 확정할 수 없습니다.
 - 브라우저에서 STL을 직접 생성하므로 기기 성능에 따라 처리 시간이 크게 달라집니다.

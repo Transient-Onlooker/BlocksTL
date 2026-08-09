@@ -1,30 +1,4 @@
-import { readFile } from 'node:fs/promises'
-import ts from 'typescript'
-
-// Node 22 cannot import TypeScript source directly. Compile this small,
-// dependency-free utility in memory so the regression test exercises the same
-// module used by the browser without relying on experimental Node flags.
-const stlSourceUrl = new URL('../src/stl.ts', import.meta.url)
-const stlSource = await readFile(stlSourceUrl, 'utf8')
-const transpiled = ts.transpileModule(stlSource, {
-  compilerOptions: {
-    module: ts.ModuleKind.ESNext,
-    target: ts.ScriptTarget.ES2022,
-  },
-  fileName: stlSourceUrl.pathname,
-  reportDiagnostics: true,
-})
-const errors = (transpiled.diagnostics ?? []).filter((diagnostic) => diagnostic.category === ts.DiagnosticCategory.Error)
-if (errors.length) {
-  throw new Error(ts.formatDiagnostics(errors, {
-    getCanonicalFileName: (fileName) => fileName,
-    getCurrentDirectory: () => process.cwd(),
-    getNewLine: () => '\n',
-  }))
-}
-
-const stlModuleUrl = `data:text/javascript;base64,${Buffer.from(transpiled.outputText).toString('base64')}`
-const { isBinaryStl, parseAsciiStl, parseBinaryStl, weldStlPositions } = await import(stlModuleUrl)
+import { isBinaryStl, parseAsciiStl, parseBinaryStl, weldStlPositions } from '../src/stl.ts'
 
 function oneTriangleBinary(trailingBytes = 0) {
   const buffer = new ArrayBuffer(84 + 50 + trailingBytes)
@@ -68,5 +42,26 @@ const welded = weldStlPositions(new Float32Array([
 ]))
 if (welded.vertices.length !== 12) throw new Error('Numeric vertex welding did not remove duplicate STL vertices')
 if (welded.indices.join(',') !== '0,1,2,0,2,3') throw new Error('Numeric vertex welding changed triangle topology')
+const inchScaled = weldStlPositions(new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]), 25.4)
+if (Math.abs(inchScaled.vertices[3] - 25.4) > 1e-5) throw new Error('Welding did not apply source-unit scale')
 
-console.log(JSON.stringify({ status: 'NoError', exactBinary: true, trailingBinary: true, truncatedRejected: true, asciiCaseInsensitive: true, numericWelding: true }))
+const withDegenerates = weldStlPositions(new Float32Array([
+  0, 0, 0, 1, 0, 0, 0, 1, 0,
+  10_000, 10_000, 10_000, 10_000, 10_000, 10_000, 1, 0, 0,
+  10_000, 10_000, 10_000, 10_001, 10_000, 10_000, 10_002, 10_000, 10_000,
+]))
+if (withDegenerates.indices.length !== 3 || withDegenerates.removedTriangles !== 2) throw new Error('Degenerate triangles were not removed')
+if (Math.max(...Array.from(withDegenerates.indices, (index) => withDegenerates.vertices[index * 3])) > 1) throw new Error('Removed degenerate outliers still affect indexed geometry')
+
+for (const invalid of [Number.NaN, Number.POSITIVE_INFINITY]) {
+  const values = new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, invalid])
+  let rejected = false
+  try { weldStlPositions(values) } catch { rejected = true }
+  if (!rejected) throw new Error(`${invalid} vertex was not rejected`)
+}
+
+let allDegenerateRejected = false
+try { weldStlPositions(new Float32Array([0, 0, 0, 1, 0, 0, 2, 0, 0])) } catch { allDegenerateRejected = true }
+if (!allDegenerateRejected) throw new Error('All-degenerate STL should fail clearly')
+
+console.log(JSON.stringify({ status: 'NoError', exactBinary: true, trailingBinary: true, truncatedRejected: true, asciiCaseInsensitive: true, numericWelding: true, unitScaling: true, degenerateFiltering: true, nonFiniteRejected: true }))

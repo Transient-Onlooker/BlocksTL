@@ -11,11 +11,13 @@ export type MeshSummary = {
 }
 
 export type FitLevel = 19 | 20 | 21
+export type StlUnit = 'mm' | 'inch'
 
 export type GeneratorSettings = {
   blockCount: number
   objectScale: number
   fitLevel: FitLevel
+  sourceUnit: StlUnit
 }
 
 export type ConnectorPosition = { x: number; y: number; z: number }

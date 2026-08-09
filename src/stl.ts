@@ -36,10 +36,12 @@ export function parseAsciiStl(buffer: ArrayBuffer) {
   return new Float32Array(values)
 }
 
-export function weldStlPositions(positions: Float32Array) {
+export function weldStlPositions(positions: Float32Array, scale = 1) {
+  if (!positions.length || positions.length % 9 !== 0) throw new Error('STL triangle 좌표 수가 유효하지 않습니다.')
+  if (!Number.isFinite(scale) || scale <= 0) throw new Error('STL 좌표 배율이 유효하지 않습니다.')
   const vertexCount = positions.length / 3
   const vertices = new Float32Array(positions.length)
-  const indices = new Uint32Array(vertexCount)
+  const weldedIndices = new Uint32Array(vertexCount)
   const buckets = new Map<number, number | number[]>()
   let uniqueCount = 0
   const sameQuantizedPosition = (index: number, qx: number, qy: number, qz: number) => (
@@ -48,9 +50,9 @@ export function weldStlPositions(positions: Float32Array) {
     && Math.round(vertices[index * 3 + 2] * 1e6) === qz
   )
   for (let i = 0; i < positions.length; i += 3) {
-    const x = positions[i]
-    const y = positions[i + 1]
-    const z = positions[i + 2]
+    const x = positions[i] * scale
+    const y = positions[i + 1] * scale
+    const z = positions[i + 2] * scale
     if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) throw new Error('STL에 유효하지 않은 좌표가 포함되어 있습니다.')
     const qx = Math.round(x * 1e6)
     const qy = Math.round(y * 1e6)
@@ -73,7 +75,44 @@ export function weldStlPositions(positions: Float32Array) {
       else if (typeof bucket === 'number') buckets.set(hash, [bucket, index])
       else bucket.push(index)
     }
-    indices[i / 3] = index
+    weldedIndices[i / 3] = index
   }
-  return { vertices: vertices.slice(0, uniqueCount * 3), indices }
+
+  const indices = new Uint32Array(weldedIndices.length)
+  let indexCount = 0
+  let removedTriangles = 0
+  for (let triangle = 0; triangle < weldedIndices.length; triangle += 3) {
+    const a = weldedIndices[triangle]
+    const b = weldedIndices[triangle + 1]
+    const c = weldedIndices[triangle + 2]
+    if (a === b || b === c || c === a || triangleAreaIsDegenerate(vertices, a, b, c)) {
+      removedTriangles += 1
+      continue
+    }
+    indices[indexCount++] = a
+    indices[indexCount++] = b
+    indices[indexCount++] = c
+  }
+  if (!indexCount) throw new Error('STL의 모든 삼각형이 겹치거나 면적이 0입니다.')
+  return { vertices: vertices.slice(0, uniqueCount * 3), indices: indices.slice(0, indexCount), removedTriangles }
+}
+
+function triangleAreaIsDegenerate(vertices: Float32Array, a: number, b: number, c: number) {
+  const ax = vertices[a * 3]
+  const ay = vertices[a * 3 + 1]
+  const az = vertices[a * 3 + 2]
+  const abx = vertices[b * 3] - ax
+  const aby = vertices[b * 3 + 1] - ay
+  const abz = vertices[b * 3 + 2] - az
+  const acx = vertices[c * 3] - ax
+  const acy = vertices[c * 3 + 1] - ay
+  const acz = vertices[c * 3 + 2] - az
+  const crossX = aby * acz - abz * acy
+  const crossY = abz * acx - abx * acz
+  const crossZ = abx * acy - aby * acx
+  const areaSquared = crossX * crossX + crossY * crossY + crossZ * crossZ
+  const abSquared = abx * abx + aby * aby + abz * abz
+  const acSquared = acx * acx + acy * acy + acz * acz
+  const edgeScaleSquared = Math.max(abSquared, acSquared, 1e-24)
+  return areaSquared <= edgeScaleSquared * edgeScaleSquared * 1e-24
 }
