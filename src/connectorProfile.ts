@@ -6,6 +6,8 @@ import type { FitLevel } from './types'
  * calibrate it without changing the spring-cell topology.
  */
 export const CONNECTOR_PROFILE = {
+  profileVersion: 'experimental-v1',
+  calibrationSource: 'video estimate + print coupon',
   referenceLevel: 19 as FitLevel,
   referencePinDiameterMm: 5.8,
   diameterStepMm: 0.1,

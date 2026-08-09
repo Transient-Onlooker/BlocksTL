@@ -2,7 +2,7 @@
 
 import Module from 'manifold-3d'
 import { CONNECTOR_PROFILE, pinDiameterFor, springCellSize } from './connectorProfile'
-import type { Bounds, ConnectorPosition, FitLevel, GeneratedFile, GeneratorSettings, WorkerRequest, WorkerResponse } from './types'
+import type { BlockPreview, Bounds, ConnectorPosition, FitLevel, GeneratedFile, GeneratorSettings, WorkerRequest, WorkerResponse } from './types'
 
 const scope = self as unknown as DedicatedWorkerGlobalScope
 const fitLevels: FitLevel[] = [19, 20, 21]
@@ -56,6 +56,61 @@ function parseAscii(buffer: ArrayBuffer) {
   }
   if (!values.length || values.length % 9 || values.some(Number.isNaN)) throw new Error('유효한 ASCII 또는 Binary STL 파일을 읽을 수 없습니다.')
   return new Float32Array(values)
+}
+
+function sampleSurfacePoints(positions: Float32Array, maxPoints = 160_000) {
+  const triangleCount = positions.length / 9
+  const targetCount = Math.min(maxPoints, Math.max(12_000, triangleCount * 3))
+  let totalArea = 0
+  for (let offset = 0; offset < positions.length; offset += 9) {
+    const abx = positions[offset + 3] - positions[offset]
+    const aby = positions[offset + 4] - positions[offset + 1]
+    const abz = positions[offset + 5] - positions[offset + 2]
+    const acx = positions[offset + 6] - positions[offset]
+    const acy = positions[offset + 7] - positions[offset + 1]
+    const acz = positions[offset + 8] - positions[offset + 2]
+    totalArea += Math.hypot(aby * acz - abz * acy, abz * acx - abx * acz, abx * acy - aby * acx) / 2
+  }
+  if (!Number.isFinite(totalArea) || totalArea <= 0) throw new Error('표면적이 없는 STL 모델입니다.')
+
+  const sampled = new Float32Array(targetCount * 3)
+  const areaStep = totalArea / targetCount
+  let nextArea = areaStep / 2
+  let accumulatedArea = 0
+  let outputIndex = 0
+  for (let offset = 0; offset < positions.length && outputIndex < targetCount; offset += 9) {
+    const ax = positions[offset]
+    const ay = positions[offset + 1]
+    const az = positions[offset + 2]
+    const bx = positions[offset + 3]
+    const by = positions[offset + 4]
+    const bz = positions[offset + 5]
+    const cx = positions[offset + 6]
+    const cy = positions[offset + 7]
+    const cz = positions[offset + 8]
+    const abx = bx - ax
+    const aby = by - ay
+    const abz = bz - az
+    const acx = cx - ax
+    const acy = cy - ay
+    const acz = cz - az
+    accumulatedArea += Math.hypot(aby * acz - abz * acy, abz * acx - abx * acz, abx * acy - aby * acx) / 2
+    while (nextArea <= accumulatedArea && outputIndex < targetCount) {
+      const u = (outputIndex * 0.7548776662466927) % 1
+      const v = (outputIndex * 0.5698402909980532 + 0.31) % 1
+      const rootU = Math.sqrt(u)
+      const wa = 1 - rootU
+      const wb = rootU * (1 - v)
+      const wc = rootU * v
+      const target = outputIndex * 3
+      sampled[target] = ax * wa + bx * wb + cx * wc
+      sampled[target + 1] = ay * wa + by * wb + cy * wc
+      sampled[target + 2] = az * wa + bz * wb + cz * wc
+      outputIndex += 1
+      nextArea += areaStep
+    }
+  }
+  return outputIndex === targetCount ? sampled : sampled.slice(0, outputIndex * 3)
 }
 
 function makeSourceMesh(wasm: Awaited<ReturnType<typeof Module>>, positions: Float32Array) {
@@ -257,6 +312,90 @@ function binaryStl(mesh: { numProp: number; vertProperties: Float32Array; triVer
   return buffer
 }
 
+type ExportMesh = { numProp: number; vertProperties: Float32Array; triVerts: Uint32Array }
+
+function rasterProjection(mesh: ExportMesh, horizontalAxis: 0 | 1 | 2, verticalAxis: 0 | 1 | 2, depthAxis: 0 | 1 | 2, near: 'min' | 'max' = 'min', width = 180, height = 132) {
+  const values = mesh.vertProperties
+  let minHorizontal = Infinity
+  let maxHorizontal = -Infinity
+  let minVertical = Infinity
+  let maxVertical = -Infinity
+  let minDepth = Infinity
+  let maxDepth = -Infinity
+  for (let index = 0; index < values.length; index += mesh.numProp) {
+    minHorizontal = Math.min(minHorizontal, values[index + horizontalAxis])
+    maxHorizontal = Math.max(maxHorizontal, values[index + horizontalAxis])
+    minVertical = Math.min(minVertical, values[index + verticalAxis])
+    maxVertical = Math.max(maxVertical, values[index + verticalAxis])
+    minDepth = Math.min(minDepth, values[index + depthAxis])
+    maxDepth = Math.max(maxDepth, values[index + depthAxis])
+  }
+  const horizontalSpan = Math.max(maxHorizontal - minHorizontal, 1e-6)
+  const verticalSpan = Math.max(maxVertical - minVertical, 1e-6)
+  const depthSpan = Math.max(maxDepth - minDepth, 1e-6)
+  const padding = 0.07
+  const project = (vertexIndex: number) => {
+    const base = vertexIndex * mesh.numProp
+    return {
+      x: padding * width + ((values[base + horizontalAxis] - minHorizontal) / horizontalSpan) * width * (1 - padding * 2),
+      y: padding * height + (1 - (values[base + verticalAxis] - minVertical) / verticalSpan) * height * (1 - padding * 2),
+      depth: values[base + depthAxis],
+    }
+  }
+  const depthBuffer = new Float32Array(width * height)
+  depthBuffer.fill(near === 'min' ? Infinity : -Infinity)
+  const plot = (x: number, y: number, depth: number) => {
+    const px = Math.max(0, Math.min(width - 1, Math.round(x)))
+    const py = Math.max(0, Math.min(height - 1, Math.round(y)))
+    const pixel = py * width + px
+    if ((near === 'min' && depth < depthBuffer[pixel]) || (near === 'max' && depth > depthBuffer[pixel])) depthBuffer[pixel] = depth
+  }
+
+  for (let triangle = 0; triangle < mesh.triVerts.length; triangle += 3) {
+    const a = project(mesh.triVerts[triangle])
+    const b = project(mesh.triVerts[triangle + 1])
+    const c = project(mesh.triVerts[triangle + 2])
+    plot(a.x, a.y, a.depth)
+    plot(b.x, b.y, b.depth)
+    plot(c.x, c.y, c.depth)
+    const denominator = (b.y - c.y) * (a.x - c.x) + (c.x - b.x) * (a.y - c.y)
+    if (Math.abs(denominator) < 1e-5) continue
+    const minX = Math.max(0, Math.floor(Math.min(a.x, b.x, c.x)))
+    const maxX = Math.min(width - 1, Math.ceil(Math.max(a.x, b.x, c.x)))
+    const minY = Math.max(0, Math.floor(Math.min(a.y, b.y, c.y)))
+    const maxY = Math.min(height - 1, Math.ceil(Math.max(a.y, b.y, c.y)))
+    for (let y = minY; y <= maxY; y += 1) {
+      for (let x = minX; x <= maxX; x += 1) {
+        const wa = ((b.y - c.y) * (x - c.x) + (c.x - b.x) * (y - c.y)) / denominator
+        const wb = ((c.y - a.y) * (x - c.x) + (a.x - c.x) * (y - c.y)) / denominator
+        const wc = 1 - wa - wb
+        if (wa >= -0.002 && wb >= -0.002 && wc >= -0.002) plot(x, y, wa * a.depth + wb * b.depth + wc * c.depth)
+      }
+    }
+  }
+
+  const pixels = new Uint8Array(width * height)
+  for (let index = 0; index < depthBuffer.length; index += 1) {
+    if (Number.isFinite(depthBuffer[index])) {
+      const distanceFromViewer = near === 'min' ? (depthBuffer[index] - minDepth) / depthSpan : (maxDepth - depthBuffer[index]) / depthSpan
+      pixels[index] = Math.round(235 - distanceFromViewer * 105)
+    }
+  }
+  return { width, height, pixels }
+}
+
+function blockPreview(mesh: ExportMesh, index: number, topConnectorCount: number, bottomConnectorCount: number): BlockPreview {
+  return {
+    index,
+    triangles: mesh.triVerts.length / 3,
+    topConnectorCount,
+    bottomConnectorCount,
+    top: rasterProjection(mesh, 0, 1, 2, 'max'),
+    bottom: rasterProjection(mesh, 0, 1, 2, 'min'),
+    side: rasterProjection(mesh, 1, 2, 0, 'min'),
+  }
+}
+
 function exportFile(manifold: any, name: string): GeneratedFile {
   const result = manifold.getMesh()
   return { name, buffer: binaryStl(result), triangles: result.triVerts.length / 3 }
@@ -280,6 +419,7 @@ async function generate(settings: GeneratorSettings) {
   const files: GeneratedFile[] = []
   try {
     const connectors = connectorPlan(source, bounds, settings)
+    post({ type: 'GENERATION_STARTED', blockCount: settings.blockCount })
     for (let index = 0; index < settings.blockCount; index += 1) {
       post({ type: 'PROGRESS', message: `블록 ${index + 1}/${settings.blockCount} 생성 중…` })
       const lower = bounds.min[2] + ((bounds.max[2] - bounds.min[2]) * index) / settings.blockCount
@@ -291,7 +431,15 @@ async function generate(settings: GeneratorSettings) {
       if (index < settings.blockCount - 1) for (const pin of connectors[index]) block = addMalePin(wasm, block, pin, settings.fitLevel)
       if (index > 0) for (const pin of connectors[index - 1]) block = addSpringSocket(wasm, block, pin)
       const name = `${sourceName.replace(/\.stl$/i, '')}_block_${String(index + 1).padStart(2, '0')}.stl`
-      files.push(exportFile(block, name))
+      const result = block.getMesh() as ExportMesh
+      files.push({ name, buffer: binaryStl(result), triangles: result.triVerts.length / 3 })
+      const preview = blockPreview(
+        result,
+        index,
+        index < settings.blockCount - 1 ? connectors[index].length : 0,
+        index > 0 ? connectors[index - 1].length : 0,
+      )
+      post({ type: 'BLOCK_GENERATED', preview }, [preview.top.pixels.buffer, preview.bottom.pixels.buffer, preview.side.pixels.buffer])
       block.delete()
     }
     post({ type: 'GENERATION_COMPLETE', files, connectors }, files.map((file) => file.buffer))
@@ -331,10 +479,11 @@ scope.onmessage = async (event: MessageEvent<WorkerRequest>) => {
     if (event.data.type === 'LOAD_STL') {
       post({ type: 'PROGRESS', message: 'STL 모델을 읽고 있습니다…' })
       const positions = isBinaryStl(event.data.buffer) ? parseBinary(event.data.buffer) : parseAscii(event.data.buffer)
-      sourcePositions = positions.slice()
+      sourcePositions = positions
       sourceName = event.data.name
-      const mesh = { name: sourceName, triangles: positions.length / 9, bounds: boundsOf(positions), positions }
-      post({ type: 'STL_LOADED', mesh }, [positions.buffer])
+      const previewPositions = sampleSurfacePoints(positions)
+      const mesh = { name: sourceName, triangles: positions.length / 9, bounds: boundsOf(positions), previewPositions }
+      post({ type: 'STL_LOADED', mesh }, [previewPositions.buffer])
     } else if (event.data.type === 'GENERATE_BLOCKS') {
       await generate(event.data.settings)
     } else if (event.data.type === 'GENERATE_FIT_TEST') {
