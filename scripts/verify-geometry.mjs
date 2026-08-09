@@ -79,4 +79,57 @@ for (const [level, diameter] of [[19, 5.8], [20, 5.9], [21, 6.0]]) {
   female.delete()
 }
 
-console.log(JSON.stringify({ status: 'NoError', springGap: profile.springGap, results }))
+const cubeSource = wasm.Manifold.cube([40, 40, 40], true)
+const cubeBlocks = []
+for (let index = 0; index < 3; index += 1) {
+  const lower = -20 + (40 * index) / 3
+  const upper = -20 + (40 * (index + 1)) / 3
+  const cutter = wasm.Manifold.cube([42, 42, upper - lower], false).translate(-21, -21, lower)
+  let block = cubeSource.intersect(cutter)
+  cutter.delete()
+  if (index < 2) block = addPin(block, 5.8, upper)
+  if (index > 0) block = addSocket(block, lower)
+  const mesh = block.getMesh()
+  if (block.status() !== 'NoError' || !mesh.triVerts.length) throw new Error(`Cube block ${index + 1} is invalid`)
+  cubeBlocks.push({
+    index: index + 1,
+    triangles: mesh.triVerts.length / 3,
+    hasMale: index < 2,
+    hasFemale: index > 0,
+    volume: +block.volume().toFixed(2),
+  })
+  block.delete()
+}
+cubeSource.delete()
+if (!cubeBlocks[1].hasMale || !cubeBlocks[1].hasFemale) throw new Error('Middle cube block must contain both connector types')
+
+const cellHalfX = (profile.springGap + profile.springThickness * 2 + profile.deflectionRoom * 2) / 2 + 0.5
+const cellHalfY = (5.8 + profile.clearance * 2) / 2 + 0.5
+const pitch = 11.5
+const circleRadius = 20
+const cylinderConnectors = []
+for (let x = -pitch; x <= pitch; x += pitch) {
+  for (let y = -pitch; y <= pitch; y += pitch) {
+    const corners = [[x - cellHalfX, y - cellHalfY], [x - cellHalfX, y + cellHalfY], [x + cellHalfX, y - cellHalfY], [x + cellHalfX, y + cellHalfY]]
+    if (corners.every(([cornerX, cornerY]) => Math.hypot(cornerX, cornerY) <= circleRadius)) cylinderConnectors.push([x, y])
+  }
+}
+if (!cylinderConnectors.length) throw new Error('Cylinder safe-area planner found no connectors')
+for (const [x, y] of cylinderConnectors) {
+  if (Math.hypot(Math.abs(x) + cellHalfX, Math.abs(y) + cellHalfY) > circleRadius) throw new Error('Cylinder connector entered the edge exclusion zone')
+}
+
+const thinNeckWidth = 8
+const thinNeckAcceptsConnector = cellHalfX * 2 <= thinNeckWidth
+if (thinNeckAcceptsConnector) throw new Error('Thin-neck model should reject the spring-cell footprint')
+
+console.log(JSON.stringify({
+  status: 'NoError',
+  springGap: profile.springGap,
+  coupons: results,
+  regressions: {
+    cubeThreeWay: cubeBlocks,
+    cylinderSafeConnectorCount: cylinderConnectors.length,
+    thinNeckRejected: !thinNeckAcceptsConnector,
+  },
+}))

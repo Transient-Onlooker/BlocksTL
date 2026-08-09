@@ -19,6 +19,37 @@
 
 백엔드는 사용하지 않는다.
 
+### 현재 구현 상태 (2026-08)
+
+이 문서의 초기 설계 및 마일스톤 중 아래 항목은 이미 구현됐다. 이후 작업에서 과거 로드맵 문구를 근거로 기능을 단순 원통 소켓 등으로 되돌리지 않는다.
+
+```text
+Manifold WASM 기반 Z 분할 및 Boolean STL 생성
+Orthographic point-cloud Cut Preview (Main Thread 최대 160k 표면 점)
+Z-up 3D Inspect
+Object Scale과 독립적인 고정 mm connector
+19/20/21 male-only 핀 보정
+Spring Socket V1 (experimental-v1)
+socket 전체 깊이 multi-slice footprint 검사
+19/20/21 실제 출력용 fit coupon
+BLOCK_GENERATED progressive QA
+실제 생성 mesh의 top / bottom / side projection
+개별 STL 및 ZIP 다운로드
+```
+
+현재 Spring Socket 치수는 원본 치수의 확정 복원값이 아니다. `video estimate + print coupon`에서 시작한 실험 프로필이며, 실제 PLA coupon의 삽입력·유격·분리력·반복 내구성 결과가 들어오기 전에는 임의로 V2 치수를 확정하지 않는다.
+
+남은 우선순위:
+
+```text
+1. fit coupon 실제 출력 및 결과 기록
+2. connector profile experimental-v2 결정
+3. 대형 STL generation 메모리/성능 측정
+4. non-manifold / multi-shell 입력 안정화
+5. Spring topology refinement (출력 데이터가 근거일 때만)
+6. 영상 palette 및 Replica UI polish
+```
+
 ---
 
 ## 2. 기본 기술 스택
@@ -39,13 +70,15 @@
 
 ### Geometry
 
-초기 설계에서는 특정 라이브러리에 종속시키지 않는다.
+현재 구현은 `manifold-3d` WASM을 사용한다.
 
-필요에 따라 이후 다음 후보를 검토한다.
+- STL triangle mesh welding
+- Z slab intersection
+- male pin union
+- Spring Socket V1 subtraction/union
+- watertight result mesh export
 
-- 자체 mesh clipping
-- Manifold WASM
-- 기타 robust mesh Boolean library
+Geometry kernel 교체 가능성은 열어두되, 현재 동작과 테스트는 Manifold WASM을 기준으로 한다.
 
 ### Export
 
@@ -74,14 +107,14 @@ Result Triangle Mesh
 STL
 ```
 
-Voxel 또는 raster grid는 connector 위치를 판단하는 경우에만 사용한다.
+Voxel 또는 raster grid는 전체 모델 형상 생성에 사용하지 않는다. 현재 connector 위치 판정은 Manifold의 여러 Z slice에서 얻은 2D polygon loop와 실제 spring-cell 직사각형 footprint containment를 사용한다.
 
 ```text
 Cut Plane
     ↓
 2D Cross Section
     ↓
-2D Binary Mask
+2D Polygon Loops
     ↓
 Connector Placement
 ```
@@ -695,32 +728,32 @@ Male Connector
 Female Connector
 ```
 
-초기 MVP:
+현재 구현:
 
 Male:
 
 ```text
-Cylinder pin
+5 mm tapered male pin + root collar
 ```
 
 Female:
 
 ```text
-Simple cylindrical socket
+Spring Socket V1 compliant cell
 ```
 
-부터 구현한다.
+19/20/21 단계는 male 지름만 5.8/5.9/6.0 mm로 바꾸며 female geometry는 고정한다.
 
 ---
 
 ## 19. Spring Socket
 
-원본 프로그램의 핵심 구조 중 하나지만 초기 구현에서는 제외한다.
+원본 프로그램의 핵심 구조를 근사한 첫 구현이 완료됐다.
 
-향후 단계에서:
+현재 상태:
 
 ```text
-Female Socket V2
+Spring Socket V1 — experimental-v1
 ```
 
 로 추가한다.
@@ -731,13 +764,11 @@ Female Socket V2
 Compliant spring structure
 ```
 
-를 사용하여 출력 공차에 대한 허용도를 확보한다.
+를 사용하여 출력 공차에 대한 허용도를 확보한다. 다만 실제 출력 성능은 아직 coupon으로 검증해야 한다.
 
 Socket geometry는 반드시 별도 모듈이어야 한다.
 
 ```text
-SimpleSocketGenerator
-
 SpringSocketGenerator
 ```
 
@@ -1072,17 +1103,17 @@ Preview에서 connector 후보 위치를 확인할 수 있어야 한다.
 
 ---
 
-### M6 — Basic Connector Geometry
+### M6 — Basic Connector Geometry (완료)
 
 구현:
 
 ```text
-Male cylinder
+Male tapered pin
 
-Female cylindrical socket
+Female Spring Socket V1
 ```
 
-아직 spring 구조는 구현하지 않는다.
+Spring 형상은 구현됐으며 `experimental-v1`으로 취급한다.
 
 ---
 
@@ -1116,9 +1147,9 @@ model_block_03.stl
 
 ---
 
-### M9 — Spring Socket
+### M9 — Spring Socket V1 (구현 완료, 물리 검증 대기)
 
-원본 프로그램과 유사한 compliant female connector 개발.
+compliant female connector의 가설형 V1을 구현했다. 다음 변경은 실제 fit coupon 결과를 근거로 한다.
 
 필요한 parameter:
 
@@ -1396,7 +1427,7 @@ Spring socket geometry
 13. 다운로드
 ```
 
-Spring connector는 MVP 이후다.
+Spring Socket V1과 fit coupon까지 구현됐다. MVP 이후 남은 단계는 실제 출력 보정과 topology refinement다.
 
 ---
 
@@ -1417,7 +1448,7 @@ Spring connector는 MVP 이후다.
 
 7. UI polish
 
-8. Spring connector
+8. Spring connector 실제 출력 검증 및 V2 보정
 ```
 
 UI보다 geometry correctness를 먼저 해결한다.

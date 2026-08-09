@@ -27,6 +27,8 @@ jobs:
         uses: actions/configure-pages@v5
       - run: npm ci
       - run: npm run build
+      - run: npm run verify:stl
+      - run: npm run verify:geometry
       - uses: actions/upload-pages-artifact@v3
         with:
           path: dist

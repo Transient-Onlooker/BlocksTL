@@ -105,6 +105,7 @@ button:focus-visible, input:focus-visible, label:has(input:focus-visible) { outl
 .viewer-modes { padding: 3px; border: 1px solid #2a405c; border-radius: 8px; background: #091525d9; }
 .viewer-modes button { border: 0; background: transparent; color: #7087a5; }
 .viewer-modes button.active { background: #21456f; color: #d6e9ff; box-shadow: inset 0 0 0 1px #5788bd55; }
+.viewer-modes button:disabled { color: #465a73; opacity: .58; cursor: not-allowed; }
 .drop-overlay { position: absolute; z-index: 8; inset: 13px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 7px; border-radius: 10px; background: #0d2036e8; pointer-events: none; }
 .drop-overlay strong { color: #d9eaff; font-size: 20px; }.drop-overlay span { color: #8babd1; font-size: 11px; }
 .viewer-hint { position: absolute; z-index: 3; right: 19px; bottom: 19px; color: #607694; font-size: 8px; }
@@ -124,7 +125,7 @@ button:focus-visible, input:focus-visible, label:has(input:focus-visible) { outl
 .empty > small { margin-top: 12px; color: #5f7590; font-size: 8px; }
 
 .results { position: absolute; z-index: 6; right: 18px; bottom: 18px; width: min(360px, calc(100% - 36px)); padding: 12px; border: 1px solid #345474; border-radius: 10px; background: #0b1728ee; box-shadow: 0 16px 45px #0008; backdrop-filter: blur(13px); }
-.qa-results { left: 18px; right: 18px; width: auto; max-height: min(330px, calc(100% - 100px)); display: flex; flex-direction: column; }
+.qa-results { top: 70px; left: 18px; right: 18px; bottom: 18px; width: auto; max-height: none; display: flex; flex-direction: column; }
 .results-head, .results-head > div, .results-head > div > span:last-child { display: flex; align-items: center; }
 .results-head { justify-content: space-between; gap: 8px; padding-bottom: 10px; border-bottom: 1px solid #263b55; }
 .results-head > div { gap: 9px; }.results-head > div > span:last-child { flex-direction: column; align-items: flex-start; gap: 2px; }
@@ -134,7 +135,7 @@ button:focus-visible, input:focus-visible, label:has(input:focus-visible) { outl
 .results-head > button:disabled { opacity: .55; cursor: wait; }
 .success-check.working { background: #1b3658; }
 .success-check .spinner { border-color: #7da1ce44; border-top-color: #9fc8f8; }
-.qa-grid { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(300px, 1fr); gap: 8px; margin-top: 9px; overflow-x: auto; overflow-y: hidden; padding-bottom: 3px; }
+.qa-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 8px; margin-top: 9px; overflow: auto; padding: 0 3px 3px 0; }
 .qa-card { min-width: 0; padding: 8px; border: 1px solid #273f5d; border-radius: 8px; background: #0d1b2e; }
 .qa-card header, .qa-card footer { display: flex; align-items: center; justify-content: space-between; gap: 7px; }
 .qa-card header span { display: flex; align-items: center; gap: 6px; color: #c8d9ed; font-size: 9px; font-weight: 700; }

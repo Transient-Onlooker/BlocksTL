@@ -4,7 +4,7 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { CONNECTOR_PROFILE } from './connectorProfile'
 import type { ConnectorPosition, MeshSummary } from './types'
 
-export type ViewerMode = 'cut' | 'inspect'
+export type ViewerMode = 'cut' | 'results' | 'inspect'
 
 type Props = {
   mesh: MeshSummary
@@ -12,10 +12,10 @@ type Props = {
   objectScale: number
   connectors: ConnectorPosition[][]
   connectorDiameter: number
-  mode: ViewerMode
+  mode: Exclude<ViewerMode, 'results'>
 }
 
-const palette = ['#3d7eff', '#9c75ff', '#f46f9d', '#f6d643', '#3bc3a1', '#39bce8', '#e87bc1', '#bfd35d']
+const palette = ['#aeb7c2', '#17d4e5', '#f044d0', '#ffe34d', '#3866ff', '#38d26b', '#f24d4d', '#9b6cff']
 
 export default function Viewer({ mesh, blockCount, objectScale, connectors, connectorDiameter, mode }: Props) {
   const mount = useRef<HTMLDivElement>(null)

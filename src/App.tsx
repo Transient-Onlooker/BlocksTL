@@ -6,7 +6,7 @@ import type { ViewerMode } from './Viewer'
 import type { BlockPreview, ConnectorPosition, FitLevel, GeneratedFile, MeshSummary, QaProjection, WorkerRequest, WorkerResponse } from './types'
 
 const formatter = new Intl.NumberFormat('ko-KR', { maximumFractionDigits: 2 })
-const blockColors = ['#4f8cff', '#9a78ff', '#ef6f9d', '#f1a54b', '#42c5a6', '#58b7ed', '#e079c1', '#b8d75d']
+const blockColors = ['#aeb7c2', '#17d4e5', '#f044d0', '#ffe34d', '#3866ff', '#38d26b', '#f24d4d', '#9b6cff']
 const fitOptions: { level: FitLevel; label: string; note: string }[] = [
   { level: 19, label: '기본', note: '먼저 권장' },
   { level: 20, label: '타이트', note: '+0.1 mm' },
@@ -42,6 +42,7 @@ export default function App() {
           setFiles([])
           setBlockPreviews([])
           setConnectors([])
+          setViewerMode('cut')
         }
         changeOperation(null)
         setStatus('설정을 확인하고 다시 시도해 주세요.')
@@ -54,10 +55,12 @@ export default function App() {
         setConnectors([])
         changeOperation(null)
         setViewerVersion((value) => value + 1)
+        setViewerMode('cut')
         setStatus(`모델을 불러왔습니다 · 삼각형 ${event.data.mesh.triangles.toLocaleString()}개`)
       }
       if (event.data.type === 'GENERATION_STARTED') {
         setBlockPreviews([])
+        setViewerMode('results')
         setStatus(`블록 0/${event.data.blockCount} · 실제 출력 형상 생성 중…`)
       }
       if (event.data.type === 'BLOCK_GENERATED') {
@@ -135,6 +138,7 @@ export default function App() {
     setFiles([])
     setBlockPreviews([])
     setConnectors([])
+    setViewerMode('cut')
     setStatus('파일을 읽고 있습니다…')
     changeOperation('load')
     const buffer = await file.arrayBuffer()
@@ -148,6 +152,7 @@ export default function App() {
     setFiles([])
     setBlockPreviews([])
     setConnectors([])
+    setViewerMode('cut')
     setStatus('샘플 모델을 준비하고 있습니다…')
     changeOperation('load')
     worker.current?.postMessage({ type: 'LOAD_STL', buffer, name: 'sample-cube.stl' } satisfies WorkerRequest, [buffer])
@@ -183,6 +188,7 @@ export default function App() {
     setFiles([])
     setBlockPreviews([])
     setConnectors([])
+    setViewerMode('cut')
     if (mesh) setStatus('설정이 변경되었습니다. 블록을 다시 생성해 주세요.')
   }
 
@@ -279,15 +285,16 @@ export default function App() {
           onDrop={(event) => { event.preventDefault(); setDropActive(false); void openFile(event.dataTransfer.files[0]) }}>
           <div className="canvas-toolbar">
             <div className="model-name"><span className={mesh ? 'ready' : ''} />{mesh ? mesh.name : '모델을 불러오지 않았습니다'}</div>
-            {mesh && <div className="viewer-actions"><div className="viewer-modes"><button className={viewerMode === 'cut' ? 'active' : ''} onClick={() => setViewerMode('cut')}>Cut Preview</button><button className={viewerMode === 'inspect' ? 'active' : ''} onClick={() => setViewerMode('inspect')}>3D 점검</button></div>{viewerMode === 'inspect' && <button onClick={() => setViewerVersion((value) => value + 1)}>보기 초기화</button>}</div>}
+            {mesh && <div className="viewer-actions"><div className="viewer-modes"><button className={viewerMode === 'cut' ? 'active' : ''} onClick={() => setViewerMode('cut')}>Cut Preview</button><button disabled={!blockPreviews.length && operation !== 'blocks'} className={viewerMode === 'results' ? 'active' : ''} onClick={() => setViewerMode('results')}>Generated Blocks</button><button className={viewerMode === 'inspect' ? 'active' : ''} onClick={() => setViewerMode('inspect')}>3D 점검</button></div>{viewerMode === 'inspect' && <button onClick={() => setViewerVersion((value) => value + 1)}>보기 초기화</button>}</div>}
           </div>
           {dropActive && <div className="drop-overlay"><strong>여기에 놓으세요</strong><span>STL 파일을 바로 열 수 있습니다.</span></div>}
           {mesh
-            ? <Viewer key={`${viewerVersion}-${viewerMode}`} mesh={mesh} blockCount={blockCount} objectScale={objectScale} connectors={connectors} connectorDiameter={pinDiameter} mode={viewerMode} />
+            ? viewerMode === 'results'
+              ? <ResultPanel files={files} previews={blockPreviews} connectorTotal={connectorTotal} busy={operation === 'blocks'} onDownload={download} onDownloadAll={downloadAll} />
+              : <Viewer key={`${viewerVersion}-${viewerMode}`} mesh={mesh} blockCount={blockCount} objectScale={objectScale} connectors={connectors} connectorDiameter={pinDiameter} mode={viewerMode} />
             : <EmptyState onOpen={() => fileInput.current?.click()} onDemo={loadDemo} />}
-          {mesh && <div className="viewer-hint">{viewerMode === 'cut' ? 'Z 높이별 분할 결과 · 수평선이 실제 절단면입니다' : '마우스로 회전 · 휠로 확대/축소 · Z축이 위쪽입니다'}</div>}
-          {mesh && !blockPreviews.length && <div className="legend">{Array.from({ length: blockCount }, (_, index) => <span key={index}><b style={{ background: blockColors[index] }} />블록 {index + 1}</span>)}</div>}
-          {blockPreviews.length > 0 && <ResultPanel files={files} previews={blockPreviews} connectorTotal={connectorTotal} busy={operation === 'blocks'} onDownload={download} onDownloadAll={downloadAll} />}
+          {mesh && viewerMode !== 'results' && <div className="viewer-hint">{viewerMode === 'cut' ? 'Z 높이별 분할 결과 · 수평선이 실제 절단면입니다' : '마우스로 회전 · 휠로 확대/축소 · Z축이 위쪽입니다'}</div>}
+          {mesh && viewerMode === 'cut' && <div className="legend">{Array.from({ length: blockCount }, (_, index) => <span key={index}><b style={{ background: blockColors[index] }} />블록 {index + 1}</span>)}</div>}
         </section>
 
         <aside className="inspector" aria-label="모델 정보">
@@ -335,7 +342,7 @@ function ResultPanel({ files, previews, connectorTotal, busy, onDownload, onDown
       const file = files[preview.index]
       return <article className="qa-card" key={preview.index}>
         <header><span><b style={{ background: blockColors[preview.index] }} />블록 {preview.index + 1}</span><small>위 핀 {preview.topConnectorCount} · 아래 소켓 {preview.bottomConnectorCount}</small></header>
-        <div className="qa-views"><figure><QaCanvas projection={preview.top} /><figcaption>위 결합면 · 핀</figcaption></figure><figure><QaCanvas projection={preview.bottom} /><figcaption>아래 결합면 · 소켓</figcaption></figure><figure><QaCanvas projection={preview.side} /><figcaption>측면</figcaption></figure></div>
+        <div className="qa-views"><figure><QaCanvas projection={preview.top} /><figcaption>{preview.topConnectorCount > 0 ? '위 결합면 · 핀' : '위 외형면'}</figcaption></figure><figure><QaCanvas projection={preview.bottom} /><figcaption>{preview.bottomConnectorCount > 0 ? '아래 결합면 · 소켓' : '아래 외형면'}</figcaption></figure><figure><QaCanvas projection={preview.side} /><figcaption>측면</figcaption></figure></div>
         <footer><span>{preview.triangles.toLocaleString()} tris</span><button disabled={!file} onClick={() => file && onDownload(file)}>{file ? 'STL 받기 ↓' : '준비 중…'}</button></footer>
       </article>
     })}</div>

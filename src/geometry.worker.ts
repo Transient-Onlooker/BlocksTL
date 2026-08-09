@@ -2,6 +2,7 @@
 
 import Module from 'manifold-3d'
 import { CONNECTOR_PROFILE, pinDiameterFor, springCellSize } from './connectorProfile'
+import { isBinaryStl, parseAsciiStl, parseBinaryStl, weldStlPositions } from './stl'
 import type { BlockPreview, Bounds, ConnectorPosition, FitLevel, GeneratedFile, GeneratorSettings, WorkerRequest, WorkerResponse } from './types'
 
 const scope = self as unknown as DedicatedWorkerGlobalScope
@@ -22,40 +23,6 @@ function boundsOf(positions: Float32Array): Bounds {
     }
   }
   return { min, max }
-}
-
-function isBinaryStl(buffer: ArrayBuffer) {
-  if (buffer.byteLength < 84) return false
-  const triangleCount = new DataView(buffer).getUint32(80, true)
-  return 84 + triangleCount * 50 === buffer.byteLength
-}
-
-function parseBinary(buffer: ArrayBuffer) {
-  const view = new DataView(buffer)
-  const triangleCount = view.getUint32(80, true)
-  const positions = new Float32Array(triangleCount * 9)
-  let offset = 84
-  let target = 0
-  for (let triangle = 0; triangle < triangleCount; triangle += 1) {
-    offset += 12
-    for (let vertex = 0; vertex < 3; vertex += 1) {
-      positions[target++] = view.getFloat32(offset, true)
-      positions[target++] = view.getFloat32(offset + 4, true)
-      positions[target++] = view.getFloat32(offset + 8, true)
-      offset += 12
-    }
-    offset += 2
-  }
-  return positions
-}
-
-function parseAscii(buffer: ArrayBuffer) {
-  const values: number[] = []
-  for (const match of new TextDecoder().decode(buffer).matchAll(/vertex\s+([-+0-9.eE]+)\s+([-+0-9.eE]+)\s+([-+0-9.eE]+)/g)) {
-    values.push(Number(match[1]), Number(match[2]), Number(match[3]))
-  }
-  if (!values.length || values.length % 9 || values.some(Number.isNaN)) throw new Error('유효한 ASCII 또는 Binary STL 파일을 읽을 수 없습니다.')
-  return new Float32Array(values)
 }
 
 function sampleSurfacePoints(positions: Float32Array, maxPoints = 160_000) {
@@ -114,23 +81,8 @@ function sampleSurfacePoints(positions: Float32Array, maxPoints = 160_000) {
 }
 
 function makeSourceMesh(wasm: Awaited<ReturnType<typeof Module>>, positions: Float32Array) {
-  const vertices: number[] = []
-  const indices: number[] = []
-  const known = new Map<string, number>()
-  for (let i = 0; i < positions.length; i += 3) {
-    const x = positions[i]
-    const y = positions[i + 1]
-    const z = positions[i + 2]
-    const key = `${Math.round(x * 1e6)},${Math.round(y * 1e6)},${Math.round(z * 1e6)}`
-    let index = known.get(key)
-    if (index === undefined) {
-      index = vertices.length / 3
-      known.set(key, index)
-      vertices.push(x, y, z)
-    }
-    indices.push(index)
-  }
-  return new wasm.Mesh({ numProp: 3, vertProperties: new Float32Array(vertices), triVerts: new Uint32Array(indices) })
+  const welded = weldStlPositions(positions)
+  return new wasm.Mesh({ numProp: 3, vertProperties: welded.vertices, triVerts: welded.indices })
 }
 
 function pointInside(point: [number, number], loops: number[][][]) {
@@ -478,7 +430,7 @@ scope.onmessage = async (event: MessageEvent<WorkerRequest>) => {
   try {
     if (event.data.type === 'LOAD_STL') {
       post({ type: 'PROGRESS', message: 'STL 모델을 읽고 있습니다…' })
-      const positions = isBinaryStl(event.data.buffer) ? parseBinary(event.data.buffer) : parseAscii(event.data.buffer)
+      const positions = isBinaryStl(event.data.buffer) ? parseBinaryStl(event.data.buffer) : parseAsciiStl(event.data.buffer)
       sourcePositions = positions
       sourceName = event.data.name
       const previewPositions = sampleSurfacePoints(positions)
