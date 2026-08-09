@@ -21,7 +21,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 24
+          # Keep the deploy path on the oldest documented runtime so the
+          # regression scripts cannot accidentally rely on Node 24 behavior.
+          node-version: 22.16.0
           cache: npm
       - name: Configure Pages
         uses: actions/configure-pages@v5

@@ -1,4 +1,30 @@
-import { isBinaryStl, parseAsciiStl, parseBinaryStl, weldStlPositions } from '../src/stl.ts'
+import { readFile } from 'node:fs/promises'
+import ts from 'typescript'
+
+// Node 22 cannot import TypeScript source directly. Compile this small,
+// dependency-free utility in memory so the regression test exercises the same
+// module used by the browser without relying on experimental Node flags.
+const stlSourceUrl = new URL('../src/stl.ts', import.meta.url)
+const stlSource = await readFile(stlSourceUrl, 'utf8')
+const transpiled = ts.transpileModule(stlSource, {
+  compilerOptions: {
+    module: ts.ModuleKind.ESNext,
+    target: ts.ScriptTarget.ES2022,
+  },
+  fileName: stlSourceUrl.pathname,
+  reportDiagnostics: true,
+})
+const errors = (transpiled.diagnostics ?? []).filter((diagnostic) => diagnostic.category === ts.DiagnosticCategory.Error)
+if (errors.length) {
+  throw new Error(ts.formatDiagnostics(errors, {
+    getCanonicalFileName: (fileName) => fileName,
+    getCurrentDirectory: () => process.cwd(),
+    getNewLine: () => '\n',
+  }))
+}
+
+const stlModuleUrl = `data:text/javascript;base64,${Buffer.from(transpiled.outputText).toString('base64')}`
+const { isBinaryStl, parseAsciiStl, parseBinaryStl, weldStlPositions } = await import(stlModuleUrl)
 
 function oneTriangleBinary(trailingBytes = 0) {
   const buffer = new ArrayBuffer(84 + 50 + trailingBytes)
