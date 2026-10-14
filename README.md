@@ -4,6 +4,15 @@
 
 **Live app:** https://transient-onlooker.github.io/BlocksTL/
 
+## 핵심 설계와 검증 범위
+
+- **모델 유지:** 전체 볼륨을 voxel로 변환하지 않고 원본 triangle mesh를 분할합니다.
+- **절단면 검증:** 여러 높이의 2D polygon 단면에 connector footprint가 들어갈 수 있는지 검사합니다.
+- **연산 분리:** 무거운 Boolean 연산은 Web Worker + Manifold WASM에서 실행합니다.
+- **출력 검증:** 생성된 블록의 투영·3D 미리보기, STL/ZIP 다운로드 및 19/20/21 맞춤 테스트 쿠폰을 제공합니다.
+
+**정확도 한계:** 스프링 소켓은 아직 `experimental-v1`이며 재료, 프린터 공차, 출력 방향에 따른 실제 결합 내구성을 보증하지 않습니다. 기계적 결합 설계 전에 테스트 쿠폰을 출력해 확인하세요. 세부 설계·남은 작업은 [기술 명세와 인수인계](BlocksTL.md)에 기록했습니다.
+
 ## What it does
 
 BlocksTL은 하나의 STL을 Z축 방향으로 2~8개 블록으로 분할하고, 서로 맞닿는 절단면에 수핀과 암 스프링 소켓을 배치합니다. 생성 전에는 포인트 클라우드 Cut Preview를, 생성 중과 완료 후에는 실제 Boolean 결과의 위·아래·측면 투영을 보여줍니다.
